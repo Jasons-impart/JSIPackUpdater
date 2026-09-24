@@ -12,6 +12,9 @@ cargo run -- preview --base-commit FULL_A_COMMIT_SHA --base-tree /path/to/commit
   --target-tree /path/to/commit-B-tree --instance /path/to/minecraft
 cargo run -- preview --base-commit FULL_A_COMMIT_SHA --base-tree /path/to/commit-A-tree \
   --target-tree /path/to/commit-B-tree --instance /path/to/minecraft --format json
+cargo run -- preview-managed --base-commit FULL_A_COMMIT_SHA \
+  --base-tree /path/to/commit-A-tree --instance /path/to/minecraft \
+  --side client --format json
 ```
 
 联网命令默认访问公开 GitHub 仓库；令牌可通过 `GITHUB_TOKEN` 或 `--token-stdin` 提供，不接受命令行明文令牌。两个本地 tree 目录须包含对应 commit 的全部 Git 跟踪普通文件，包括 `pack/pack.toml`。实例须有 `config/createdelight_release_info.json`；若目标更改 Minecraft 或 NeoForge 版本，预览会停止并提示新建实例。预览列出写入、删除、保留本地、可自动合并和冲突；不修改游戏文件。退出码 2 表示存在冲突。模组下载、事务执行与更新功能尚未接入。

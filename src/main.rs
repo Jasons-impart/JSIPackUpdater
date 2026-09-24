@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
+use jsipack_updater::managed::{Side, adopt_installed};
 use jsipack_updater::planner::{Action, Plan, plan_roots_checked};
 use jsipack_updater::safe_fs::SafeRoot;
 use jsipack_updater::source::{GitHub, SourceLimits};
@@ -20,6 +21,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Preview the first verified bkmpw manifest for an installed client or server.
+    PreviewManaged {
+        #[arg(long)]
+        base_tree: PathBuf,
+        /// Full commit SHA represented by the supplied base snapshot.
+        #[arg(long)]
+        base_commit: String,
+        #[arg(long)]
+        instance: PathBuf,
+        #[arg(long, value_enum)]
+        side: Side,
+        #[arg(long, value_enum, default_value = "text")]
+        format: Format,
+    },
     /// Compare complete A/B source snapshots with the installed instance; never writes files.
     Preview {
         #[arg(long)]
@@ -63,6 +78,47 @@ enum Format {
 fn main() -> Result<ExitCode> {
     let Cli { command } = Cli::parse();
     match command {
+        Command::PreviewManaged {
+            base_tree,
+            base_commit,
+            instance,
+            side,
+            format,
+        } => {
+            let base_root = SafeRoot::open(&base_tree)?;
+            let instance_root = SafeRoot::open(&instance)?;
+            let check = check_components_roots(&base_root, &base_root, &instance_root)?;
+            if !base_commit.eq_ignore_ascii_case(&check.info.commit_id) {
+                bail!("base snapshot commit does not match the installed release marker");
+            }
+            let adoption = adopt_installed(&base_root, &instance_root, side)?;
+            let stdout = io::stdout();
+            let mut output = stdout.lock();
+            match format {
+                Format::Json => writeln!(
+                    output,
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({"manifest": adoption.manifest, "conflicts": adoption.conflicts})
+                    )?
+                )?,
+                Format::Text => {
+                    writeln!(
+                        output,
+                        "{} verified managed file(s), {} conflict(s)",
+                        adoption.manifest.files.len(),
+                        adoption.conflicts.len()
+                    )?;
+                    for conflict in &adoption.conflicts {
+                        writeln!(output, "conflict\t{}\t{}", conflict.path, conflict.reason)?;
+                    }
+                }
+            }
+            output.flush()?;
+            if !adoption.conflicts.is_empty() {
+                return Ok(ExitCode::from(2));
+            }
+        }
         Command::Preview {
             base_tree,
             base_commit,
