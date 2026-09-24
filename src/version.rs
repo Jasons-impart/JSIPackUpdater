@@ -48,18 +48,7 @@ pub fn check_components_roots(
     target_tree: &SafeRoot,
     instance: &SafeRoot,
 ) -> Result<ComponentCheck> {
-    let info: ReleaseInfo =
-        serde_json::from_slice(&instance.required_file("config/createdelight_release_info.json")?)
-            .context("parsing installed release marker")?;
-    if info.schema_version != 1
-        || info.version.trim().is_empty()
-        || info.commit_id.len() != 40
-        || !info.commit_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-        || info.minecraft_version.trim().is_empty()
-        || info.neoforge_version.trim().is_empty()
-    {
-        bail!("invalid installed release marker");
-    }
+    let info = load_release_info(instance)?;
     let descriptors = [
         ("base", base_tree.required_file("pack/pack.toml")?),
         ("target", target_tree.required_file("pack/pack.toml")?),
@@ -85,4 +74,20 @@ pub fn check_components_roots(
         base_pack_hash,
         target_pack_hash,
     })
+}
+
+pub fn load_release_info(instance: &SafeRoot) -> Result<ReleaseInfo> {
+    let info: ReleaseInfo =
+        serde_json::from_slice(&instance.required_file("config/createdelight_release_info.json")?)
+            .context("parsing installed release marker")?;
+    if info.schema_version != 1
+        || info.version.trim().is_empty()
+        || info.commit_id.len() != 40
+        || !info.commit_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || info.minecraft_version.trim().is_empty()
+        || info.neoforge_version.trim().is_empty()
+    {
+        bail!("invalid installed release marker");
+    }
+    Ok(info)
 }
