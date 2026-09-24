@@ -4,7 +4,7 @@ use cap_std::fs::{Dir, OpenOptions};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{ErrorKind, Read};
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
@@ -42,7 +42,316 @@ pub struct SafeRoot {
     dir: Dir,
 }
 
+#[cfg(windows)]
+fn open_attributes(dir: &Dir, name: &str) -> Result<cap_std::fs::File> {
+    use cap_std::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_WRITE_ATTRIBUTES,
+    };
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .access_mode(FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES);
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = dir.open_with(name, &options)?;
+    if !file.metadata()?.is_file() {
+        bail!("path is not a regular file: {name}");
+    }
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn set_readonly(dir: &Dir, name: &str, readonly: bool) -> Result<()> {
+    let file = open_attributes(dir, name)?;
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_readonly(readonly);
+    file.set_permissions(permissions)?;
+    Ok(())
+}
+
 impl SafeRoot {
+    #[cfg(windows)]
+    pub fn set_readonly(&self, relative: &str, readonly: bool) -> Result<()> {
+        let (dir, name) = self.parent(relative, false)?;
+        let dir = dir.with_context(|| format!("missing parent for {relative}"))?;
+        set_readonly(&dir, &name, readonly)
+    }
+
+    pub fn open_dir(&self, relative: &str) -> Result<Self> {
+        let mut dir = self.dir.try_clone()?;
+        for part in validate_relative(relative)? {
+            dir = open_directory(&dir, part)?;
+        }
+        Ok(Self { dir })
+    }
+
+    pub fn open_lock_file(&self, relative: &str) -> Result<std::fs::File> {
+        let (dir, name) = self.parent(relative, true)?;
+        let dir = dir.expect("creating parent always returns a directory");
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        #[cfg(windows)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            options.custom_flags(
+                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+            );
+        }
+        let file = dir.open_with(&name, &options)?;
+        if !file.metadata()?.is_file() {
+            bail!("lock path is not a regular file: {relative}");
+        }
+        Ok(file.into_std())
+    }
+    /// Open a regular file without following a symlink in any path component.
+    pub fn open_regular(&self, relative: &str) -> Result<Option<cap_std::fs::File>> {
+        let (dir, name) = self.parent(relative, false)?;
+        let Some(dir) = dir else { return Ok(None) };
+        match dir.open_with(&name, &file_options()) {
+            Ok(file) => {
+                if !file.metadata()?.is_file() {
+                    bail!("path is not a regular file: {relative}");
+                }
+                Ok(Some(file))
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).with_context(|| format!("opening {relative}")),
+        }
+    }
+
+    /// Create directories through checked handles, rejecting symlink ancestors.
+    pub fn ensure_dir(&self, relative: &str) -> Result<()> {
+        let mut dir = self.dir.try_clone()?;
+        for part in validate_relative(relative)? {
+            match dir.create_dir(part) {
+                Ok(()) => sync_directory(&dir)?,
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error).with_context(|| format!("creating {relative}")),
+            }
+            dir = open_directory(&dir, part)?;
+        }
+        Ok(())
+    }
+
+    fn parent(&self, relative: &str, create: bool) -> Result<(Option<Dir>, String)> {
+        let parts = validate_relative(relative)?;
+        let mut dir = self.dir.try_clone()?;
+        for part in &parts[..parts.len() - 1] {
+            if create {
+                match dir.create_dir(part) {
+                    Ok(()) => sync_directory(&dir)?,
+                    Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("creating {relative}"));
+                    }
+                }
+            }
+            dir = match open_directory(&dir, part) {
+                Ok(child) => child,
+                Err(error)
+                    if !create
+                        && error
+                            .downcast_ref::<io::Error>()
+                            .is_some_and(|cause| cause.kind() == ErrorKind::NotFound) =>
+                {
+                    return Ok((None, parts[parts.len() - 1].to_owned()));
+                }
+                Err(error) => return Err(error).with_context(|| format!("opening {relative}")),
+            };
+        }
+        Ok((Some(dir), parts[parts.len() - 1].to_owned()))
+    }
+
+    pub fn remove_regular(&self, relative: &str) -> Result<()> {
+        let (dir, name) = self.parent(relative, false)?;
+        let Some(dir) = dir else { return Ok(()) };
+        let metadata = match dir.symlink_metadata(&name) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
+            Ok(_) => bail!("path is not a regular file: {relative}"),
+            Err(error) => return Err(error.into()),
+        };
+        #[cfg(windows)]
+        if metadata.permissions().readonly() {
+            set_readonly(&dir, &name, false)?;
+        }
+        #[cfg(not(windows))]
+        let _ = metadata;
+        dir.remove_file(&name)
+            .with_context(|| format!("removing {relative}"))?;
+        sync_directory(&dir)
+    }
+
+    pub fn remove_empty_dir(&self, relative: &str) -> Result<()> {
+        let (dir, name) = self.parent(relative, false)?;
+        let Some(dir) = dir else { return Ok(()) };
+        match dir.symlink_metadata(&name) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => bail!("path is not a directory: {relative}"),
+            Err(error) => return Err(error.into()),
+        }
+        dir.remove_dir(&name)?;
+        sync_directory(&dir)
+    }
+
+    pub fn write_atomic(&self, relative: &str, input: impl Read) -> Result<()> {
+        self.write_atomic_with_permissions(relative, input, None)
+    }
+
+    fn write_atomic_with_permissions(
+        &self,
+        relative: &str,
+        input: impl Read,
+        preferred_permissions: Option<cap_std::fs::Permissions>,
+    ) -> Result<()> {
+        self.write_atomic_with_permissions_checked(
+            relative,
+            input,
+            preferred_permissions,
+            || Ok(()),
+        )
+    }
+
+    fn write_atomic_with_permissions_checked(
+        &self,
+        relative: &str,
+        mut input: impl Read,
+        preferred_permissions: Option<cap_std::fs::Permissions>,
+        before_replace: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let (dir, name) = self.parent(relative, true)?;
+        let dir = dir.expect("creating parent always returns a directory");
+        let permissions = match dir.symlink_metadata(&name) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                Some(metadata.permissions())
+            }
+            Ok(_) => bail!("path is not a regular file: {relative}"),
+            Err(error) if error.kind() == ErrorKind::NotFound => preferred_permissions,
+            Err(error) => return Err(error.into()),
+        };
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let (temp, mut file) = loop {
+            let temp = format!(
+                ".jsipack-tmp-{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_nanos(),
+                NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            );
+            if temp == name {
+                continue;
+            }
+            match dir.open_with(&temp, &options) {
+                Ok(file) => break (temp, file),
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("creating temporary file for {relative}"));
+                }
+            }
+        };
+        let result = (|| -> Result<()> {
+            io::copy(&mut input, &mut file)?;
+            #[cfg(not(windows))]
+            if let Some(permissions) = permissions.clone() {
+                file.set_permissions(permissions)?;
+            }
+            file.flush()?;
+            file.sync_all()?;
+            drop(file);
+            before_replace()?;
+            #[cfg(windows)]
+            let was_readonly = match dir.symlink_metadata(&name) {
+                Ok(metadata) => metadata.permissions().readonly(),
+                Err(error) if error.kind() == ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+            };
+            #[cfg(windows)]
+            if was_readonly {
+                set_readonly(&dir, &name, false)?;
+            }
+            if let Err(error) = dir.rename(&temp, &dir, &name) {
+                #[cfg(windows)]
+                if was_readonly {
+                    let _ = set_readonly(&dir, &name, true);
+                }
+                return Err(error.into());
+            }
+            #[cfg(windows)]
+            if let Some(permissions) = permissions {
+                let installed = open_attributes(&dir, &name)?;
+                installed.set_permissions(permissions)?;
+            }
+            sync_directory(&dir)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = dir.remove_file(&temp);
+        }
+        result.with_context(|| format!("writing {relative}"))
+    }
+
+    pub fn copy_regular_to(
+        &self,
+        relative: &str,
+        target: &SafeRoot,
+        target_path: &str,
+    ) -> Result<bool> {
+        let Some(file) = self.open_regular(relative)? else {
+            return Ok(false);
+        };
+        let permissions = file.metadata()?.permissions();
+        target.write_atomic_with_permissions(target_path, file, Some(permissions))?;
+        Ok(true)
+    }
+
+    pub fn copy_regular_to_checked(
+        &self,
+        relative: &str,
+        target: &SafeRoot,
+        target_path: &str,
+        before_replace: impl FnOnce() -> Result<()>,
+    ) -> Result<bool> {
+        let Some(file) = self.open_regular(relative)? else {
+            return Ok(false);
+        };
+        let permissions = file.metadata()?.permissions();
+        target.write_atomic_with_permissions_checked(
+            target_path,
+            file,
+            Some(permissions),
+            before_replace,
+        )?;
+        Ok(true)
+    }
+
+    #[cfg(unix)]
+    pub fn set_unix_mode(&self, relative: &str, mode: u32) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let file = self
+            .open_regular(relative)?
+            .with_context(|| format!("missing file: {relative}"))?;
+        file.set_permissions(cap_std::fs::Permissions::from_std(
+            std::fs::Permissions::from_mode(mode),
+        ))?;
+        file.sync_all()?;
+        Ok(())
+    }
+
     pub fn file_paths(&self) -> Result<BTreeSet<String>> {
         let mut paths = BTreeSet::new();
         self.collect_paths(&self.dir, "", &mut paths)?;
@@ -383,6 +692,18 @@ fn open_directory(dir: &Dir, name: &str) -> Result<Dir> {
     Ok(Dir::from_std_file(file.into_std()))
 }
 
+fn sync_directory(dir: &Dir) -> Result<()> {
+    #[cfg(unix)]
+    dir.try_clone()?.into_std_file().sync_all()?;
+    #[cfg(windows)]
+    {
+        // Directory flush support varies by filesystem. The file data and
+        // journal are flushed regardless; try the directory handle as well.
+        let _ = dir.try_clone()?.into_std_file().sync_all();
+    }
+    Ok(())
+}
+
 fn directory_options() -> OpenOptions {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -459,5 +780,72 @@ mod tests {
             root.hash_artifact("large.jar").unwrap(),
             LocalArtifact::File(_)
         ));
+    }
+
+    #[test]
+    fn checked_copy_preserves_external_edit_before_replace() {
+        let source = tempfile::TempDir::new().unwrap();
+        let target = tempfile::TempDir::new().unwrap();
+        std::fs::write(source.path().join("file.txt"), b"new").unwrap();
+        std::fs::write(target.path().join("file.txt"), b"old").unwrap();
+        let source_root = SafeRoot::open(source.path()).unwrap();
+        let target_root = SafeRoot::open(target.path()).unwrap();
+        let result =
+            source_root.copy_regular_to_checked("file.txt", &target_root, "file.txt", || {
+                std::fs::write(target.path().join("file.txt"), b"external")?;
+                if target_root.required_file("file.txt")?.as_slice() != b"old" {
+                    bail!("destination changed while staging replacement");
+                }
+                Ok(())
+            });
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(target.path().join("file.txt")).unwrap(),
+            b"external"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_copy_preserves_existing_and_new_file_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let source = tempfile::TempDir::new().unwrap();
+        let target = tempfile::TempDir::new().unwrap();
+        std::fs::write(source.path().join("script.sh"), b"new").unwrap();
+        std::fs::set_permissions(
+            source.path().join("script.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        std::fs::write(target.path().join("private.sh"), b"old").unwrap();
+        std::fs::set_permissions(
+            target.path().join("private.sh"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let source = SafeRoot::open(source.path()).unwrap();
+        let target_root = SafeRoot::open(target.path()).unwrap();
+        source
+            .copy_regular_to("script.sh", &target_root, "script.sh")
+            .unwrap();
+        source
+            .copy_regular_to("script.sh", &target_root, "private.sh")
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(target.path().join("script.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert_eq!(
+            std::fs::metadata(target.path().join("private.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 }
