@@ -1,18 +1,26 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
+use jsipack_updater::bkmpw;
 use jsipack_updater::managed::{Side, adopt_installed};
 use jsipack_updater::planner::{Action, Plan, plan_roots_checked};
 use jsipack_updater::safe_fs::SafeRoot;
 use jsipack_updater::source::{GitHub, SourceLimits};
+use jsipack_updater::transaction;
+use jsipack_updater::updater::{self, ConflictPolicy, ConflictResolution};
 use jsipack_updater::version::{check_components_roots, load_release_info};
+use std::collections::BTreeMap;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[cfg(feature = "gui")]
+mod gui;
+mod tui;
+
 #[derive(Parser)]
 #[command(
     name = "jsipack-updater",
-    about = "Preview an update for an installed JSIPack instance"
+    about = "Update an installed JSIPack client or server instance"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -21,6 +29,73 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Show update progress in a terminal window.
+    Tui {
+        #[arg(long)]
+        instance: PathBuf,
+        #[arg(long)]
+        target: String,
+        #[arg(long, value_enum)]
+        side: Side,
+        #[arg(long)]
+        bkmpw: Option<PathBuf>,
+        #[arg(long, default_value = "Jasons-impart/Create-Delight-Project-Rebirth")]
+        repo: String,
+        #[arg(long)]
+        token_stdin: bool,
+        #[arg(long, value_enum, default_value = "stop")]
+        conflicts: ConflictChoice,
+        #[arg(long = "resolve", value_name = "PATH=target|local|manual:FILE")]
+        resolve: Vec<String>,
+    },
+    #[cfg(feature = "gui")]
+    /// Open the graphical updater window.
+    Gui,
+    /// Apply a fixed GitHub tag or commit to a stopped instance.
+    UpdateRemote {
+        #[arg(long)]
+        instance: PathBuf,
+        #[arg(long)]
+        target: String,
+        #[arg(long, value_enum)]
+        side: Side,
+        #[arg(long)]
+        bkmpw: Option<PathBuf>,
+        #[arg(long, default_value = "Jasons-impart/Create-Delight-Project-Rebirth")]
+        repo: String,
+        #[arg(long)]
+        token_stdin: bool,
+        #[arg(long, value_enum, default_value = "stop")]
+        conflicts: ConflictChoice,
+        #[arg(long = "resolve", value_name = "PATH=target|local|manual:FILE")]
+        resolve: Vec<String>,
+    },
+    /// Apply local full source snapshots for testing or offline use.
+    UpdateLocal {
+        #[arg(long)]
+        base_tree: PathBuf,
+        #[arg(long)]
+        base_commit: String,
+        #[arg(long)]
+        target_tree: PathBuf,
+        #[arg(long)]
+        target_commit: String,
+        #[arg(long)]
+        instance: PathBuf,
+        #[arg(long, value_enum)]
+        side: Side,
+        #[arg(long)]
+        bkmpw: Option<PathBuf>,
+        #[arg(long, value_enum, default_value = "stop")]
+        conflicts: ConflictChoice,
+        #[arg(long = "resolve", value_name = "PATH=target|local|manual:FILE")]
+        resolve: Vec<String>,
+    },
+    /// Restore an interrupted update from its verified backups.
+    Rollback {
+        #[arg(long)]
+        instance: PathBuf,
+    },
     /// Preview the first verified bkmpw manifest for an installed client or server.
     PreviewManaged {
         #[arg(long)]
@@ -75,9 +150,128 @@ enum Format {
     Json,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ConflictChoice {
+    Stop,
+    UseTarget,
+    KeepLocal,
+}
+
+impl From<ConflictChoice> for ConflictPolicy {
+    fn from(choice: ConflictChoice) -> Self {
+        match choice {
+            ConflictChoice::Stop => Self::Stop,
+            ConflictChoice::UseTarget => Self::UseTarget,
+            ConflictChoice::KeepLocal => Self::KeepLocal,
+        }
+    }
+}
+
+fn parse_resolutions(values: &[String]) -> Result<BTreeMap<String, ConflictResolution>> {
+    let mut output = BTreeMap::new();
+    for value in values {
+        let (path, choice) = value
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("resolution must be PATH=target|local|manual:FILE"))?;
+        let resolution = match choice {
+            "target" => ConflictResolution::UseTarget,
+            "local" => ConflictResolution::KeepLocal,
+            manual if manual.starts_with("manual:") && manual.len() > 7 => {
+                ConflictResolution::Manual(PathBuf::from(&manual[7..]))
+            }
+            _ => bail!("invalid resolution for {path}"),
+        };
+        if output.insert(path.to_owned(), resolution).is_some() {
+            bail!("duplicate resolution for {path}");
+        }
+    }
+    Ok(output)
+}
+
 fn main() -> Result<ExitCode> {
     let Cli { command } = Cli::parse();
     match command {
+        Command::Tui {
+            instance,
+            target,
+            side,
+            bkmpw,
+            repo,
+            token_stdin,
+            conflicts,
+            resolve,
+        } => {
+            tui::run(RemoteArgs {
+                instance,
+                target,
+                side,
+                bkmpw,
+                repo,
+                token: read_token(token_stdin)?,
+                conflicts,
+                resolutions: parse_resolutions(&resolve)?,
+            })?;
+        }
+        #[cfg(feature = "gui")]
+        Command::Gui => gui::run()?,
+        Command::Rollback { instance } => {
+            transaction::rollback(&instance)?;
+            println!("interrupted update rolled back");
+        }
+        Command::UpdateLocal {
+            base_tree,
+            base_commit,
+            target_tree,
+            target_commit,
+            instance,
+            side,
+            bkmpw,
+            conflicts,
+            resolve,
+        } => {
+            let installed = load_release_info(&SafeRoot::open(&instance)?)?;
+            if !base_commit.eq_ignore_ascii_case(&installed.commit_id) {
+                bail!("base snapshot commit does not match installed release marker");
+            }
+            let executable = bkmpw_path(bkmpw)?;
+            let report = updater::update(updater::UpdateRequest {
+                base_path: &base_tree,
+                target_path: &target_tree,
+                instance_path: &instance,
+                base_commit: &base_commit,
+                target_commit: &target_commit,
+                side,
+                bkmpw_executable: &executable,
+                policy: conflicts.into(),
+                resolutions: parse_resolutions(&resolve)?,
+            })?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::UpdateRemote {
+            instance,
+            target,
+            side,
+            bkmpw,
+            repo,
+            token_stdin,
+            conflicts,
+            resolve,
+        } => {
+            let report = run_remote_update(
+                RemoteArgs {
+                    instance,
+                    target,
+                    side,
+                    bkmpw,
+                    repo,
+                    token: read_token(token_stdin)?,
+                    conflicts,
+                    resolutions: parse_resolutions(&resolve)?,
+                },
+                |_| {},
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
         Command::PreviewManaged {
             base_tree,
             base_commit,
@@ -183,6 +377,108 @@ fn main() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+#[derive(Clone)]
+struct RemoteArgs {
+    instance: PathBuf,
+    target: String,
+    side: Side,
+    bkmpw: Option<PathBuf>,
+    repo: String,
+    token: Option<String>,
+    conflicts: ConflictChoice,
+    resolutions: BTreeMap<String, ConflictResolution>,
+}
+
+#[cfg(feature = "gui")]
+struct PreviewSummary {
+    base_commit: String,
+    target_commit: String,
+    item_count: usize,
+    conflicts: Vec<String>,
+}
+
+fn run_remote_update(
+    args: RemoteArgs,
+    mut progress: impl FnMut(String),
+) -> Result<updater::UpdateReport> {
+    if transaction::pending(&args.instance)? {
+        bail!("unfinished update exists; run rollback before another update");
+    }
+    let instance_root = SafeRoot::open(&args.instance)?;
+    let installed = load_release_info(&instance_root)?;
+    let executable = bkmpw_path(args.bkmpw)?;
+    instance_root.ensure_dir(".jsipack-updater/cache")?;
+    let cache = args.instance.join(".jsipack-updater/cache");
+    let github = GitHub::new(&args.repo, args.token)?;
+    progress("Fetching installed commit".into());
+    let base = github.fetch_snapshot_cached(&installed.commit_id, &cache)?;
+    progress("Fetching target commit".into());
+    let destination = github.fetch_snapshot_cached(&args.target, &cache)?;
+    updater::update_with_progress(
+        updater::UpdateRequest {
+            base_path: base.root.path(),
+            target_path: destination.root.path(),
+            instance_path: &args.instance,
+            base_commit: &base.commit_id,
+            target_commit: &destination.commit_id,
+            side: args.side,
+            bkmpw_executable: &executable,
+            policy: args.conflicts.into(),
+            resolutions: args.resolutions,
+        },
+        progress,
+    )
+    .map_err(|error| {
+        if let Some(conflicts) = error.downcast_ref::<updater::UnresolvedConflicts>() {
+            anyhow::Error::new(updater::UnresolvedConflicts {
+                paths: conflicts.paths.clone(),
+                target_commit: Some(destination.commit_id.clone()),
+            })
+            .context(error.to_string())
+        } else {
+            error
+        }
+    })
+}
+
+#[cfg(feature = "gui")]
+fn run_remote_preview(args: &RemoteArgs) -> Result<PreviewSummary> {
+    let instance_root = SafeRoot::open(&args.instance)?;
+    let installed = load_release_info(&instance_root)?;
+    let github = GitHub::new(&args.repo, args.token.clone())?;
+    let base = github.fetch_snapshot(&installed.commit_id)?;
+    let destination = github.fetch_snapshot(&args.target)?;
+    let base_root = SafeRoot::open(base.root.path())?;
+    let target_root = SafeRoot::open(destination.root.path())?;
+    let check = check_components_roots(&base_root, &target_root, &instance_root)?;
+    if !check.info.commit_id.eq_ignore_ascii_case(&base.commit_id) {
+        bail!("installed commit changed during preview");
+    }
+    let plan = plan_roots_checked(&base_root, &target_root, &instance_root, &check)?;
+    Ok(PreviewSummary {
+        base_commit: base.commit_id,
+        target_commit: destination.commit_id,
+        item_count: plan.items.len(),
+        conflicts: plan
+            .items
+            .into_iter()
+            .filter(|item| item.action == Action::Conflict)
+            .map(|item| format!("{} ({})", item.path, item.reason))
+            .collect(),
+    })
+}
+
+fn bkmpw_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(path);
+    }
+    let executable = std::env::current_exe()?;
+    let name = if cfg!(windows) { "bkmpw.exe" } else { "bkmpw" };
+    let path = executable.with_file_name(name);
+    bkmpw::verify_pinned_binary(&path)?;
+    Ok(path)
+}
+
 fn read_token(from_stdin: bool) -> Result<Option<String>> {
     let token = if from_stdin {
         if io::stdin().is_terminal() {
@@ -215,14 +511,17 @@ fn print_plan(plan: &Plan, format: Format, commits: Option<(&str, &str)>) -> Res
     match format {
         Format::Json => {
             if let Some((base, target)) = commits {
-                let document =
-                    serde_json::json!({"base_commit":base,"target_commit":target,"plan":plan});
+                let document = serde_json::json!({"base_commit":base,"target_commit":target,"scope":"source_files_only","plan":plan});
                 writeln!(output, "{}", serde_json::to_string_pretty(&document)?)?;
             } else {
                 writeln!(output, "{}", serde_json::to_string_pretty(plan)?)?;
             }
         }
         Format::Text => {
+            writeln!(
+                output,
+                "Source file preview only; managed artifacts and generated files are checked during update preparation."
+            )?;
             if let Some((base, target)) = commits {
                 writeln!(output, "{base} -> {target}")?;
             }
