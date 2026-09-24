@@ -1,3 +1,4 @@
+pub mod bkmpw;
 pub mod managed;
 pub mod planner;
 pub mod safe_fs;
