@@ -906,3 +906,779 @@ pub fn git_blob_sha(bytes: &[u8]) -> String {
     sha.update(bytes);
     format!("{:x}", sha.finalize())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn serve(responses: Vec<(&'static str, Vec<u8>)>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            for (expected, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let count = stream.read(&mut request).unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..count])
+                        .to_ascii_lowercase()
+                        .contains(&expected.to_ascii_lowercase())
+                );
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        (base, handle)
+    }
+
+    fn archive(path: &str, content: &[u8]) -> Vec<u8> {
+        archive_many(&[(path, content)])
+    }
+
+    fn archive_many(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let gzip = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = tar::Builder::new(gzip);
+        for (path, content) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o644);
+            header.set_size(content.len() as u64);
+            header.set_cksum();
+            tar.append_data(&mut header, path, *content).unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn git_blob_hash_and_repo_validation() {
+        assert_eq!(
+            git_blob_sha(b""),
+            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        );
+        assert!(GitHub::new("owner/repo", None).is_ok());
+        assert!(GitHub::new("owner/repo/extra", None).is_err());
+        for base in ["https://host/api/v3/", "https://host/api/v3"] {
+            let github = GitHub::with_api("owner/repo", None, base).unwrap();
+            assert_eq!(
+                github
+                    .api_url(&["repos", "owner", "repo"], &[])
+                    .unwrap()
+                    .path(),
+                "/api/v3/repos/owner/repo"
+            );
+        }
+    }
+
+    #[test]
+    fn truncated_tree_falls_back_to_child_trees() {
+        let root = "a".repeat(40);
+        let child = "b".repeat(40);
+        let blob = git_blob_sha(b"hello\n");
+        let recursive = serde_json::json!({"truncated":true,"tree":[]});
+        let top = serde_json::json!({"truncated":false,"tree":[{"path":"dir","mode":"040000","type":"tree","sha":child}]});
+        let nested = serde_json::json!({"truncated":false,"tree":[{"path":"file.txt","mode":"100644","type":"blob","sha":blob,"size":6}]});
+        let (base, server) = serve(vec![
+            ("recursive=1", recursive.to_string().into_bytes()),
+            ("/git/trees/", top.to_string().into_bytes()),
+            ("/git/trees/", nested.to_string().into_bytes()),
+        ]);
+        let github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        let files = github.fetch_tree(&root, &FetchBudget::new()).unwrap();
+        assert!(files.contains_key("dir/file.txt"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn archive_export_transform_uses_verified_raw_blob() {
+        let commit = "a".repeat(40);
+        let original = b"echo hello\n";
+        let transformed = b"echo hello\r\n";
+        let mut files = BTreeMap::new();
+        files.insert(
+            "devtool.bat".into(),
+            TreeEntry {
+                path: "devtool.bat".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(original),
+                size: Some(original.len() as u64),
+            },
+        );
+        let (base, server) = serve(vec![
+            ("/tarball/", archive("prefix/devtool.bat", transformed)),
+            ("/devtool.bat", original.to_vec()),
+        ]);
+        let github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
+        let output = TempDir::new().unwrap();
+        github
+            .download_archive(&commit, &files, output.path(), &mut FetchBudget::new())
+            .unwrap();
+        assert_eq!(
+            fs::read(output.path().join("devtool.bat")).unwrap(),
+            original
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn private_blob_fallback_sends_token_to_git_api() {
+        let content = b"private\n";
+        let sha = git_blob_sha(content);
+        let entry = TreeEntry {
+            path: "file.txt".into(),
+            mode: "100644".into(),
+            kind: "blob".into(),
+            sha: sha.clone(),
+            size: Some(content.len() as u64),
+        };
+        let body = serde_json::json!({
+            "sha":sha,"size":content.len(),"encoding":"base64",
+            "content":base64::engine::general_purpose::STANDARD.encode(content),
+        });
+        let (base, server) = serve(vec![(
+            "authorization: bearer test-secret",
+            body.to_string().into_bytes(),
+        )]);
+        let github =
+            GitHub::with_endpoints("owner/repo", Some("test-secret".into()), &base, &base).unwrap();
+        assert_eq!(
+            github
+                .fetch_raw_blob(&"a".repeat(40), "file.txt", &entry, &mut FetchBudget::new())
+                .unwrap(),
+            content
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn custom_api_uses_its_blob_endpoint_without_token() {
+        let content = b"custom";
+        let sha = git_blob_sha(content);
+        let body = serde_json::json!({"sha":sha,"size":content.len(),"encoding":"base64","content":base64::engine::general_purpose::STANDARD.encode(content)});
+        let (base, server) = serve(vec![("/git/blobs/", body.to_string().into_bytes())]);
+        let github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        let entry = TreeEntry {
+            path: "custom".into(),
+            mode: "100644".into(),
+            kind: "blob".into(),
+            sha,
+            size: Some(content.len() as u64),
+        };
+        assert_eq!(
+            github
+                .fetch_raw_blob(&"a".repeat(40), "custom", &entry, &mut FetchBudget::new())
+                .unwrap(),
+            content
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn tree_budget_rejects_file_count_and_bytes() {
+        let mut github = GitHub::new("owner/repo", None).unwrap();
+        let mut files = BTreeMap::new();
+        files.insert(
+            "a".into(),
+            TreeEntry {
+                path: "a".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(b"a"),
+                size: Some(1),
+            },
+        );
+        files.insert(
+            "b".into(),
+            TreeEntry {
+                path: "b".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(b"b"),
+                size: Some(1),
+            },
+        );
+        github
+            .set_limits(SourceLimits {
+                max_snapshot_bytes: 10,
+                max_files: 1,
+            })
+            .unwrap();
+        assert!(
+            github
+                .check_budget(&files)
+                .unwrap_err()
+                .to_string()
+                .contains("files")
+        );
+        github
+            .set_limits(SourceLimits {
+                max_snapshot_bytes: 1,
+                max_files: 2,
+            })
+            .unwrap();
+        assert!(
+            github
+                .check_budget(&files)
+                .unwrap_err()
+                .to_string()
+                .contains("byte limit")
+        );
+    }
+
+    #[test]
+    fn traversal_budget_rejects_before_collecting_more_files() {
+        let mut files = BTreeMap::new();
+        let mut budget = TreeBudget::default();
+        let limits = SourceLimits {
+            max_snapshot_bytes: 1,
+            max_files: 1,
+        };
+        let first = TreeEntry {
+            path: "first".into(),
+            mode: "100644".into(),
+            kind: "blob".into(),
+            sha: git_blob_sha(b"a"),
+            size: Some(1),
+        };
+        let second = TreeEntry {
+            path: "second".into(),
+            mode: "100644".into(),
+            kind: "blob".into(),
+            sha: git_blob_sha(b"a"),
+            size: Some(1),
+        };
+        insert_file(&mut files, first, &limits, &mut budget).unwrap();
+        assert!(insert_file(&mut files, second, &limits, &mut budget).is_err());
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn nested_file_and_small_files_require_disk_overhead() {
+        let estimate = required_disk_space(2, ["a/one", "b/two"]).unwrap();
+        assert!(estimate >= DISK_RESERVE + 4 * 8192 + 2);
+        let mut files = BTreeMap::new();
+        let mut budget = TreeBudget::default();
+        let path = format!("{}file", "d/".repeat(MAX_TREE_DEPTH + 1));
+        let entry = TreeEntry {
+            path,
+            mode: "100644".into(),
+            kind: "blob".into(),
+            sha: git_blob_sha(b""),
+            size: Some(0),
+        };
+        assert!(
+            insert_file(&mut files, entry, &SourceLimits::default(), &mut budget)
+                .unwrap_err()
+                .to_string()
+                .contains("depth")
+        );
+        let nested: Vec<String> = (0..1000)
+            .map(|index| format!("group{index}/{}/file", "nested/".repeat(32)))
+            .collect();
+        let limit = archive_stream_limit(1024, nested.iter().map(String::as_str)).unwrap();
+        assert!(limit > 1024 + 1000 * 32 * 4096);
+    }
+
+    #[test]
+    fn missing_archive_files_have_shared_fallback_limit() {
+        let mut fetch = FetchBudget::new();
+        for _ in 0..MAX_BLOB_FALLBACKS {
+            fetch.fallback().unwrap();
+        }
+        assert!(
+            fetch
+                .fallback()
+                .unwrap_err()
+                .to_string()
+                .contains("fallback request limit")
+        );
+    }
+
+    #[test]
+    fn archive_stream_limit_rejects_skipped_payload() {
+        let payload = vec![0u8; 17 * 1024 * 1024];
+        let gzip = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = tar::Builder::new(gzip);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(payload.len() as u64);
+        header.set_cksum();
+        tar.append_data(&mut header, "prefix/ignored/", payload.as_slice())
+            .unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(3);
+        header.set_cksum();
+        tar.append_data(&mut header, "prefix/one", b"one".as_slice())
+            .unwrap();
+        let compressed = tar.into_inner().unwrap().finish().unwrap();
+        let (base, server) = serve(vec![("/tarball/", compressed)]);
+        let mut github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        github
+            .set_limits(SourceLimits {
+                max_snapshot_bytes: 3,
+                max_files: 1,
+            })
+            .unwrap();
+        let mut files = BTreeMap::new();
+        files.insert(
+            "one".into(),
+            TreeEntry {
+                path: "one".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(b"one"),
+                size: Some(3),
+            },
+        );
+        let output = TempDir::new().unwrap();
+        let error = github
+            .download_archive(
+                &"a".repeat(40),
+                &files,
+                output.path(),
+                &mut FetchBudget::new(),
+            )
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("stream limit"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn expanded_tracked_payload_cannot_bypass_archive_stream_limit() {
+        let original = b"ptr";
+        let expanded = vec![0u8; 17 * 1024 * 1024];
+        let compressed = archive("prefix/pointer", &expanded);
+        let (base, server) = serve(vec![("/tarball/", compressed)]);
+        let mut github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        github
+            .set_limits(SourceLimits {
+                max_snapshot_bytes: 3,
+                max_files: 1,
+            })
+            .unwrap();
+        let files = BTreeMap::from([(
+            "pointer".into(),
+            TreeEntry {
+                path: "pointer".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(original),
+                size: Some(3),
+            },
+        )]);
+        let output = TempDir::new().unwrap();
+        let error = github
+            .download_archive(
+                &"a".repeat(40),
+                &files,
+                output.path(),
+                &mut FetchBudget::new(),
+            )
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("stream limit"), "{error:#}");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn oversized_pax_metadata_is_rejected_before_tar_buffers_it() {
+        let payload = vec![b'x'; (MAX_TAR_METADATA + 1) as usize];
+        let gzip = GzEncoder::new(Vec::new(), Compression::default());
+        let mut builder = tar::Builder::new(gzip);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::XHeader);
+        header.set_size(payload.len() as u64);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "pax-header", payload.as_slice())
+            .unwrap();
+        let bytes = builder.into_inner().unwrap().finish().unwrap();
+        let (base, server) = serve(vec![("/tarball/", bytes)]);
+        let github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        let output = TempDir::new().unwrap();
+        let error = github
+            .download_archive(
+                &"a".repeat(40),
+                &BTreeMap::new(),
+                output.path(),
+                &mut FetchBudget::new(),
+            )
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("metadata exceeds"),
+            "{error:#}"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn oversized_archive_representation_falls_back_to_original_blob() {
+        let original = b"ptr";
+        let commit = "a".repeat(40);
+        let mut files = BTreeMap::new();
+        files.insert(
+            "pointer".into(),
+            TreeEntry {
+                path: "pointer".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(original),
+                size: Some(3),
+            },
+        );
+        let mut header = tar::Header::new_gnu();
+        header.set_path("prefix/pointer").unwrap();
+        header.set_size(32 * 1024 * 1024);
+        header.set_cksum();
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(header.as_bytes()).unwrap();
+        gzip.write_all(&[0u8; 1024]).unwrap();
+        let (base, server) = serve(vec![
+            ("/tarball/", gzip.finish().unwrap()),
+            ("/pointer", original.to_vec()),
+        ]);
+        let github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
+        let output = TempDir::new().unwrap();
+        github
+            .download_archive(&commit, &files, output.path(), &mut FetchBudget::new())
+            .unwrap();
+        assert_eq!(fs::read(output.path().join("pointer")).unwrap(), original);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn non_block_aligned_truncated_expansion_uses_verified_blob() {
+        let original = b"ptr";
+        let mut files = BTreeMap::new();
+        files.insert(
+            "pointer".into(),
+            TreeEntry {
+                path: "pointer".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(original),
+                size: Some(3),
+            },
+        );
+        let mut header = tar::Header::new_gnu();
+        header.set_path("prefix/pointer").unwrap();
+        header.set_size(32 * 1024 * 1024);
+        header.set_cksum();
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(header.as_bytes()).unwrap();
+        gzip.write_all(&[0u8; 1025]).unwrap();
+        let (base, server) = serve(vec![
+            ("/tarball/", gzip.finish().unwrap()),
+            ("/pointer", original.to_vec()),
+        ]);
+        let github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
+        let output = TempDir::new().unwrap();
+        github
+            .download_archive(
+                &"a".repeat(40),
+                &files,
+                output.path(),
+                &mut FetchBudget::new(),
+            )
+            .unwrap();
+        assert_eq!(fs::read(output.path().join("pointer")).unwrap(), original);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn early_expanded_blob_does_not_consume_fallback_budget_for_later_files() {
+        let original = b"ptr";
+        let expanded = vec![0u8; 12 * 1024 * 1024];
+        let gzip = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = tar::Builder::new(gzip);
+        let mut files = BTreeMap::new();
+        files.insert(
+            "pointer".into(),
+            TreeEntry {
+                path: "pointer".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(original),
+                size: Some(3),
+            },
+        );
+        let mut header = tar::Header::new_gnu();
+        header.set_size(expanded.len() as u64);
+        header.set_cksum();
+        tar.append_data(&mut header, "prefix/pointer", expanded.as_slice())
+            .unwrap();
+        for index in 0..=MAX_BLOB_FALLBACKS {
+            let path = format!("file-{index}");
+            let mut header = tar::Header::new_gnu();
+            header.set_size(1);
+            header.set_cksum();
+            tar.append_data(&mut header, format!("prefix/{path}"), b"x".as_slice())
+                .unwrap();
+            files.insert(
+                path.clone(),
+                TreeEntry {
+                    path,
+                    mode: "100644".into(),
+                    kind: "blob".into(),
+                    sha: git_blob_sha(b"x"),
+                    size: Some(1),
+                },
+            );
+        }
+        let bytes = tar.into_inner().unwrap().finish().unwrap();
+        let (base, server) = serve(vec![("/tarball/", bytes), ("/pointer", original.to_vec())]);
+        let mut github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
+        github
+            .set_limits(SourceLimits {
+                max_snapshot_bytes: 5 * 1024 * 1024,
+                max_files: 1000,
+            })
+            .unwrap();
+        let output = TempDir::new().unwrap();
+        github
+            .download_archive(
+                &"a".repeat(40),
+                &files,
+                output.path(),
+                &mut FetchBudget::new(),
+            )
+            .unwrap();
+        assert_eq!(fs::read(output.path().join("file-512")).unwrap(), b"x");
+        server.join().unwrap();
+    }
+
+    fn pax_size_archive(size: u64, payload: &[u8], following: bool) -> Vec<u8> {
+        let value = format!("size={size}\n");
+        let mut length = value.len() + 2;
+        loop {
+            let record = format!("{length} {value}");
+            if record.len() == length {
+                break;
+            }
+            length = record.len();
+        }
+        let record = format!("{length} {value}");
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::XHeader);
+        header.set_path("pax").unwrap();
+        header.set_size(record.len() as u64);
+        header.set_cksum();
+        gzip.write_all(header.as_bytes()).unwrap();
+        gzip.write_all(record.as_bytes()).unwrap();
+        gzip.write_all(&vec![0; (512 - record.len() % 512) % 512])
+            .unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_path("prefix/a").unwrap();
+        header.set_size(1);
+        header.set_cksum();
+        gzip.write_all(header.as_bytes()).unwrap();
+        gzip.write_all(payload).unwrap();
+        if following {
+            gzip.write_all(&vec![0; (512 - payload.len() % 512) % 512])
+                .unwrap();
+            let mut header = tar::Header::new_gnu();
+            header.set_path("prefix/b").unwrap();
+            header.set_size(1);
+            header.set_cksum();
+            gzip.write_all(header.as_bytes()).unwrap();
+            gzip.write_all(b"b").unwrap();
+            gzip.write_all(&[0; 511]).unwrap();
+        }
+        gzip.write_all(&[0; 1024]).unwrap();
+        gzip.finish().unwrap()
+    }
+
+    #[test]
+    fn pax_size_override_keeps_following_headers_aligned() {
+        let mut files = BTreeMap::new();
+        for (path, bytes) in [("a", b"abc".as_slice()), ("b", b"b".as_slice())] {
+            files.insert(
+                path.into(),
+                TreeEntry {
+                    path: path.into(),
+                    mode: "100644".into(),
+                    kind: "blob".into(),
+                    sha: git_blob_sha(bytes),
+                    size: Some(bytes.len() as u64),
+                },
+            );
+        }
+        let (base, server) = serve(vec![("/tarball/", pax_size_archive(3, b"abc", true))]);
+        let github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        let output = TempDir::new().unwrap();
+        github
+            .download_archive(
+                &"a".repeat(40),
+                &files,
+                output.path(),
+                &mut FetchBudget::new(),
+            )
+            .unwrap();
+        assert_eq!(fs::read(output.path().join("b")).unwrap(), b"b");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn local_pax_size_is_consumed_by_directory_before_next_file() {
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        let mut pax = tar::Header::new_gnu();
+        pax.set_entry_type(tar::EntryType::XHeader);
+        pax.set_path("pax").unwrap();
+        pax.set_size(10);
+        pax.set_cksum();
+        gzip.write_all(pax.as_bytes()).unwrap();
+        gzip.write_all(b"10 size=0\n").unwrap();
+        gzip.write_all(&[0; 502]).unwrap();
+        let mut directory = tar::Header::new_gnu();
+        directory.set_entry_type(tar::EntryType::Directory);
+        directory.set_path("prefix/dir/").unwrap();
+        directory.set_size(0);
+        directory.set_cksum();
+        gzip.write_all(directory.as_bytes()).unwrap();
+        let mut file = tar::Header::new_gnu();
+        file.set_path("prefix/a").unwrap();
+        file.set_size(1);
+        file.set_cksum();
+        gzip.write_all(file.as_bytes()).unwrap();
+        gzip.write_all(b"a").unwrap();
+        gzip.write_all(&[0; 511]).unwrap();
+        gzip.write_all(&[0; 1024]).unwrap();
+        let mut files = BTreeMap::new();
+        files.insert(
+            "a".into(),
+            TreeEntry {
+                path: "a".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(b"a"),
+                size: Some(1),
+            },
+        );
+        let (base, server) = serve(vec![("/tarball/", gzip.finish().unwrap())]);
+        let github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        let output = TempDir::new().unwrap();
+        github
+            .download_archive(
+                &"a".repeat(40),
+                &files,
+                output.path(),
+                &mut FetchBudget::new(),
+            )
+            .unwrap();
+        assert_eq!(fs::read(output.path().join("a")).unwrap(), b"a");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn oversized_pax_size_uses_verified_blob_fallback() {
+        let original = b"ptr";
+        let mut files = BTreeMap::new();
+        files.insert(
+            "a".into(),
+            TreeEntry {
+                path: "a".into(),
+                mode: "100644".into(),
+                kind: "blob".into(),
+                sha: git_blob_sha(original),
+                size: Some(3),
+            },
+        );
+        let (base, server) = serve(vec![
+            ("/tarball/", pax_size_archive(32 * 1024 * 1024, b"", false)),
+            ("/a", original.to_vec()),
+        ]);
+        let github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
+        let output = TempDir::new().unwrap();
+        github
+            .download_archive(
+                &"a".repeat(40),
+                &files,
+                output.path(),
+                &mut FetchBudget::new(),
+            )
+            .unwrap();
+        assert_eq!(fs::read(output.path().join("a")).unwrap(), original);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn extraction_budget_failure_drops_partial_snapshot() {
+        let commit = "a".repeat(40);
+        let mut files = BTreeMap::new();
+        for name in ["a", "b"] {
+            files.insert(
+                name.into(),
+                TreeEntry {
+                    path: name.into(),
+                    mode: "100644".into(),
+                    kind: "blob".into(),
+                    sha: git_blob_sha(b"abc"),
+                    size: Some(3),
+                },
+            );
+        }
+        let bytes = archive_many(&[("prefix/a", b"abc"), ("prefix/b", b"abc")]);
+        let (base, server) = serve(vec![("/tarball/", bytes)]);
+        let mut github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        github
+            .set_limits(SourceLimits {
+                max_snapshot_bytes: 5,
+                max_files: 2,
+            })
+            .unwrap();
+        let parent = TempDir::new().unwrap();
+        let snapshot = TempDir::new_in(parent.path()).unwrap();
+        let path = snapshot.path().to_owned();
+        assert!(
+            github
+                .download_archive(&commit, &files, &path, &mut FetchBudget::new())
+                .unwrap_err()
+                .to_string()
+                .contains("byte limit")
+        );
+        assert!(path.join("a").exists());
+        drop(snapshot);
+        assert!(!path.exists());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn authenticated_blob_body_without_content_length_is_bounded() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            assert!(stream.read(&mut request).unwrap() > 0);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            stream.write_all(&vec![b'x'; 70_000]).unwrap();
+        });
+        let entry = TreeEntry {
+            path: "empty".into(),
+            mode: "100644".into(),
+            kind: "blob".into(),
+            sha: git_blob_sha(b""),
+            size: Some(0),
+        };
+        let github =
+            GitHub::with_endpoints("owner/repo", Some("secret".into()), &base, &base).unwrap();
+        assert!(
+            github
+                .fetch_raw_blob(&"a".repeat(40), "empty", &entry, &mut FetchBudget::new())
+                .unwrap_err()
+                .to_string()
+                .contains("size limit")
+        );
+        server.join().unwrap();
+    }
+}
