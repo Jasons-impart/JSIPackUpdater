@@ -1,0 +1,97 @@
+name: Build updater
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('updater-pr-{0}', github.event.pull_request.number) || format('updater-ref-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: ""
+            bkmpw_sha256: dce331c2b86ac701dc2d4a38b16fae0512ed0fdda9d68d0547a286683db9ab7c
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: .exe
+            bkmpw_sha256: c27f51b757269e70fd2eb93840f6c170eae957e250792165ce0263178209e156
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            suffix: ""
+            bkmpw_sha256: a51e9ac418f9a2ad287565ba2b591e488c600c848b5b1b2d90c5b54d1cf0e943
+          - os: macos-15
+            target: aarch64-apple-darwin
+            suffix: ""
+            bkmpw_sha256: 72e1a25fef033604ff5d59146a8158a311425b92ecbf5b55035e6bb238a3936d
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Test
+        run: cargo test --locked --all-features --target ${{ matrix.target }}
+      - name: Check warnings
+        run: cargo clippy --locked --all-features --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: Build
+        run: cargo build --release --locked --features gui --target ${{ matrix.target }}
+      - name: Download and verify pinned bkmpw
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+          SUFFIX: ${{ matrix.suffix }}
+          EXPECTED_SHA: ${{ matrix.bkmpw_sha256 }}
+        run: |
+          mkdir -p dist
+          cp "target/$TARGET/release/jsipack-updater$SUFFIX" "dist/jsipack-updater$SUFFIX"
+          cp assets/DroidSansFallbackFull.COPYRIGHT assets/Apache-2.0.txt assets/BroKnowMyPackwiz.LICENSE dist/
+          asset="bkmpw-v0.2.5-$TARGET$SUFFIX"
+          gh release download v0.2.5 --repo bro-know-my-org/BroKnowMyPackwiz --pattern "$asset" --dir dist
+          python -c 'import hashlib,os,pathlib; p=pathlib.Path("dist")/("bkmpw-v0.2.5-"+os.environ["TARGET"]+os.environ["SUFFIX"]); actual=hashlib.sha256(p.read_bytes()).hexdigest(); expected=os.environ["EXPECTED_SHA"]; assert actual==expected,(actual,expected); p.rename(p.with_name("bkmpw"+os.environ["SUFFIX"]))'
+          chmod +x "dist/bkmpw$SUFFIX" "dist/jsipack-updater$SUFFIX"
+          "dist/bkmpw$SUFFIX" --jsonl protocol-version
+      - name: Archive portable bundle
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          python -c 'import os,pathlib,zipfile; p=pathlib.Path("dist"); out=pathlib.Path("jsipack-updater-"+os.environ["TARGET"]+".zip"); z=zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED); [z.write(f,f.name) for f in p.iterdir()]; z.close()'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jsipack-updater-${{ matrix.target }}
+          path: jsipack-updater-${{ matrix.target }}.zip
+          if-no-files-found: error
+
+  publish:
+    timeout-minutes: 20
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: jsipack-updater-*
+          merge-multiple: true
+          path: dist
+      - name: Publish archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --generate-notes

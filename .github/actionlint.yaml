@@ -1,0 +1,5 @@
+# actionlint v1.7.7 predates GitHub's standard macOS 15 Intel runner label.
+paths:
+  .github/workflows/release.yml:
+    ignore:
+      - 'label "macos-15-intel" is unknown'

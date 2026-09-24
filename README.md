@@ -1,28 +1,42 @@
 # JSIPackUpdater
 
-面向 Minecraft 整合包的版本更新器。目前的 CLI 可从 GitHub 固定提交获取源码并只读预览更新计划，也可使用本地快照测试三方比较。
+Minecraft 整合包更新器。CLI、TUI 和可选的 egui GUI 共用 Rust 更新核心；支持客户端和服务端。它从安装版本的 commit 更新到指定 tag/commit，同步 Git 跟踪文件及 `bkmpw` 管理的模组、资源包和光影。Minecraft 或 NeoForge 版本变化时会停止更新并提示新建实例。
+
+## 使用
+
+先停止游戏或服务端，并备份整个实例。下载与操作系统相符的更新器压缩包，把其中的 `jsipack-updater` 和 `bkmpw` 放在同一目录。实例须含 `config/createdelight_release_info.json`。
 
 ```bash
-cargo run -- preview-remote --instance /path/to/minecraft --target v2.0.0.0-test2
-cargo run -- preview-remote --instance /path/to/minecraft --target FULL_COMMIT_SHA \
-  --repo Jasons-impart/Create-Delight-Project-Rebirth --format json
+# 预览（不会写入实例）
+jsipack-updater preview-remote --instance /path/to/minecraft --target v2.0.0.0-test2
 
-# 本地 fixture：调用者须保证目录对应所声明的提交
-cargo run -- preview --base-commit FULL_A_COMMIT_SHA --base-tree /path/to/commit-A-tree \
-  --target-tree /path/to/commit-B-tree --instance /path/to/minecraft
-cargo run -- preview --base-commit FULL_A_COMMIT_SHA --base-tree /path/to/commit-A-tree \
-  --target-tree /path/to/commit-B-tree --instance /path/to/minecraft --format json
-cargo run -- preview-managed --base-commit FULL_A_COMMIT_SHA \
-  --base-tree /path/to/commit-A-tree --instance /path/to/minecraft \
-  --side client --format json
+# 更新客户端；服务端改用 --side server
+jsipack-updater update-remote --instance /path/to/minecraft --side client --target v2.0.0.0-test2
+
+# 终端界面，或 GUI（GUI 版本需启用 gui 功能构建）
+jsipack-updater tui --instance /path/to/minecraft --side client --target v2.0.0.0-test2
+jsipack-updater gui
+
+# 应用阶段中断后，从已校验的备份回退
+jsipack-updater rollback --instance /path/to/minecraft
 ```
 
-联网命令默认访问公开 GitHub 仓库；令牌可通过 `GITHUB_TOKEN` 或 `--token-stdin` 提供，不接受命令行明文令牌。两个本地 tree 目录须包含对应 commit 的全部 Git 跟踪普通文件，包括 `pack/pack.toml`。实例须有 `config/createdelight_release_info.json`；若目标更改 Minecraft 或 NeoForge 版本，预览会停止并提示新建实例。预览列出写入、删除、保留本地、可自动合并和冲突；不修改游戏文件。退出码 2 表示存在冲突。模组下载、事务执行与更新功能尚未接入。
+更新默认访问公开仓库 `Jasons-impart/Create-Delight-Project-Rebirth`；可以用 `--repo owner/name` 指定其他仓库。GitHub 限流时可设置 `GITHUB_TOKEN`，或传 `--token-stdin` 从标准输入/隐藏终端输入读取令牌。令牌不会作为命令行参数传递。
 
-我的理解是：整合包发布包负责初始安装，并通过 `config/createdelight_release_info.json` 提供对应的源 commit、Minecraft 和 NeoForge 版本；更新器负责把**当前已安装版本**同步到用户选择的目标 commit/tag。玩家无需安装 Git；更新器维护本地版本记录，并通过 GitHub 获取版本信息和文件。模组 jar 通常不在 Git 中；更新器根据目标版本的模组描述文件下载、校验和清理对应 jar。
+`preview` 与 `preview-remote` 展示源码文件冲突；模组产物和生成文件冲突会在更新准备阶段检查。
 
-目标形态是共用一个 Rust 更新核心，提供 CLI、TUI 和基于 `egui/eframe` 的简洁 GUI 更新窗口；游戏启动由现有启动器负责。玩家端默认匿名访问公开 GitHub 仓库，遇到 API 限流可输入令牌重试；模组同步直接调用随更新器交付的 `bkmpw` 原生程序，不要求安装 npm。作者发布前用 `devtool set-version` 修改并提交版本信息；玩家更新时以 commit SHA 为准，通过事务记录识别和恢复未完成的更新。Minecraft 或 NeoForge 版本变化时，首版提示新建实例，协助升级留待后续。
+无冲突时直接更新。有冲突时，默认停止并列出路径；可逐项指定 `--resolve '路径=target'`、`--resolve '路径=local'` 或 `--resolve '路径=manual:/path/to/merged-file'`。也可用 `--conflicts use-target` 或 `--conflicts keep-local` 批量决定；逐项选择优先。TUI 遇冲突可按 `t` 用新版、`l` 保留本地、`m` 输入手工合并文件路径，记录选择后重试。手动合并文件由用户在实例外编辑，更新器在准备阶段复制其内容。私有 jar 选择保留本地后不加入受管清单。TUI 和 GUI 提供回退入口；GUI 可逐行输入相同的冲突选择。
 
-**新对话请先读 [实施交接文档](docs/implementation-plan.md)**：包含已定决策、发包契约、冲突处理、首次 `packwiz.json` 建立、落地顺序和验收条件。框架比较与研究依据见 [设计背景](docs/design.md)。
+更新器把侧别、可信缓存、生成文件基线、覆盖状态及事务备份放在实例内 `.jsipack-updater/`。准备和下载失败不会改动实例；应用中断后需先运行 `rollback`，再重新更新。不要在更新时启动游戏或修改实例文件。
 
-参考整合包：`/home/halo/.local/share/PrismLauncher/instances/CDPR/minecraft`。该路径只用于分析现有工作流，不应成为程序中的固定路径。
+## 开发与验收
+
+```bash
+cargo test --all-features
+cargo clippy --all-features --all-targets -- -D warnings
+cargo build --release --features gui
+```
+
+`update-local` 和 `preview`/`preview-managed` 可用本地完整源码快照验证更新；快照目录须对应传入的完整 commit SHA。`update-local` 还需 `--base-commit`、`--target-commit`、`--base-tree`、`--target-tree`、`--instance`、`--side`，并可用 `--bkmpw` 指向协议兼容的本地程序。发布工作流在 Linux、Windows、macOS 构建并打包固定版本的原生 `bkmpw`，且验证其 SHA-256 与进度协议。
+
+实施细节和验收边界见 [实施计划](docs/implementation-plan.md)。
