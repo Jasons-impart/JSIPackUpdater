@@ -341,6 +341,17 @@ fn safe_relative(path: &Path) -> Result<String> {
     Ok(parts.join("/"))
 }
 
+pub fn validate_source_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    let mut collected = BTreeSet::new();
+    for path in paths {
+        if path.is_empty() || safe_relative(Path::new(path))? != path {
+            bail!("unsafe source path: {path}");
+        }
+        collected.insert(path.to_owned());
+    }
+    check_collisions(&collected)
+}
+
 fn check_collisions(paths: &BTreeSet<String>) -> Result<()> {
     let mut folded = BTreeMap::<String, String>::new();
     let folded_files: BTreeSet<_> = paths.iter().map(|path| portable_case_key(path)).collect();
@@ -379,6 +390,7 @@ mod tests {
 
     #[test]
     fn rejects_portability_hazards_without_host_filesystem_assumptions() {
+        assert!(validate_source_paths([""]).is_err());
         let paths = ["Mods/A.txt", "mods/a.txt"]
             .into_iter()
             .map(String::from)
