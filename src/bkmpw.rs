@@ -2,6 +2,7 @@ use crate::managed::Side;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::io::{self, Read};
 use std::panic::{self, AssertUnwindSafe};
@@ -13,6 +14,44 @@ use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::time::{Duration, Instant};
 
 const MAX_EVENT_LINE: u64 = 64 * 1024;
+
+pub const PINNED_VERSION: &str = "v0.2.5";
+
+pub fn verify_pinned_binary(executable: &Path) -> Result<()> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const EXPECTED: &str = "dce331c2b86ac701dc2d4a38b16fae0512ed0fdda9d68d0547a286683db9ab7c";
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    const EXPECTED: &str = "c27f51b757269e70fd2eb93840f6c170eae957e250792165ce0263178209e156";
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    const EXPECTED: &str = "a51e9ac418f9a2ad287565ba2b591e488c600c848b5b1b2d90c5b54d1cf0e943";
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    const EXPECTED: &str = "72e1a25fef033604ff5d59146a8158a311425b92ecbf5b55035e6bb238a3936d";
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
+    const EXPECTED: &str = "";
+    if EXPECTED.is_empty() {
+        bail!("no pinned bkmpw binary is published for this platform");
+    }
+    let mut file = std::fs::File::open(executable)?;
+    let mut hasher = Sha256::new();
+    let mut bytes = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut bytes)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&bytes[..count]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != EXPECTED {
+        bail!("bundled bkmpw checksum does not match pinned {PINNED_VERSION} binary");
+    }
+    Ok(())
+}
 
 struct BkmPwChild {
     #[cfg(unix)]
@@ -235,9 +274,7 @@ fn run_with_timeout(
                     result?
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    if !descendants_stopped
-                        && child.lock().unwrap().has_exited_without_reap()?
-                    {
+                    if !descendants_stopped && child.lock().unwrap().has_exited_without_reap()? {
                         child.lock().unwrap().terminate();
                         descendants_stopped = true;
                         post_exit_deadline = Some(Instant::now() + Duration::from_millis(250));
@@ -719,6 +756,7 @@ mod tests {
         let script = dir.path().join("incomplete-stdout-bkmpw");
         std::fs::write(&script, "#!/bin/sh\nsleep 5 &\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}'\nexit 0\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
         let start = Instant::now();
         let error = run_with_timeout(
             &script,

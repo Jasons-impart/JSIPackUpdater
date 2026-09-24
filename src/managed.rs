@@ -53,6 +53,13 @@ struct Metadata {
     filename: String,
     side: Option<String>,
     download: Option<Download>,
+    option: Option<OptionMetadata>,
+}
+
+#[derive(Deserialize)]
+struct OptionMetadata {
+    optional: Option<bool>,
+    default: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -251,12 +258,180 @@ pub fn validate_manifest(
     Ok(conflicts)
 }
 
+/// Locate selected optional metadata by its stable descriptor path. A target
+/// descriptor at the same path retains the player's installation choice.
+pub fn optional_choices(
+    base: &SafeRoot,
+    side: Side,
+    manifest: &Manifest,
+) -> Result<BTreeMap<String, bool>> {
+    let installed: BTreeSet<_> = manifest
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    let mut choices = BTreeMap::new();
+    for path in base
+        .file_paths()?
+        .iter()
+        .filter(|path| path.ends_with(".pw.toml"))
+    {
+        let bytes = base.required_file(path)?;
+        let metadata: Metadata = toml::from_str(std::str::from_utf8(&bytes)?)?;
+        if applies(path, &metadata, side)?
+            && metadata
+                .option
+                .as_ref()
+                .is_some_and(|option| option.optional == Some(true))
+        {
+            choices.insert(
+                path.clone(),
+                installed.contains(destination(path, &metadata.filename)?.as_str()),
+            );
+        }
+    }
+    Ok(choices)
+}
+
+/// An existing but unverified optional artifact is selected, though not owned.
+pub fn optional_conflict_choices(
+    base: &SafeRoot,
+    side: Side,
+    conflicts: &[AdoptionConflict],
+) -> Result<BTreeMap<String, bool>> {
+    let conflicted: BTreeSet<_> = conflicts.iter().map(|item| item.path.as_str()).collect();
+    let mut choices = BTreeMap::new();
+    for path in base
+        .file_paths()?
+        .iter()
+        .filter(|path| path.ends_with(".pw.toml"))
+    {
+        let bytes = base.required_file(path)?;
+        let metadata: Metadata = toml::from_str(std::str::from_utf8(&bytes)?)
+            .with_context(|| format!("parsing optional descriptor {path}"))?;
+        if applies(path, &metadata, side)?
+            && metadata
+                .option
+                .as_ref()
+                .is_some_and(|option| option.optional == Some(true))
+            && conflicted.contains(destination(path, &metadata.filename)?.as_str())
+        {
+            choices.insert(path.clone(), true);
+        }
+    }
+    Ok(choices)
+}
+
+/// Read the effective optional selections after local choices have been applied.
+pub fn optional_selections(source: &SafeRoot, side: Side) -> Result<BTreeMap<String, bool>> {
+    let mut selected = BTreeMap::new();
+    for path in source
+        .file_paths()?
+        .iter()
+        .filter(|path| path.ends_with(".pw.toml"))
+    {
+        let bytes = source.required_file(path)?;
+        let metadata: Metadata = toml::from_str(std::str::from_utf8(&bytes)?)
+            .with_context(|| format!("parsing optional descriptor {path}"))?;
+        if applies(path, &metadata, side)?
+            && let Some(option) = metadata.option
+            && option.optional == Some(true)
+        {
+            selected.insert(path.clone(), option.default.unwrap_or(false));
+        }
+    }
+    Ok(selected)
+}
+
+pub fn apply_optional_choices(
+    source: &SafeRoot,
+    choices: &BTreeMap<String, bool>,
+    side: Side,
+) -> Result<()> {
+    for (path, chosen) in choices {
+        let Some(bytes) = source.open_regular(path)? else {
+            continue;
+        };
+        let mut text = String::new();
+        use std::io::Read;
+        std::io::BufReader::new(bytes).read_to_string(&mut text)?;
+        let metadata: Metadata = toml::from_str(&text)?;
+        if !applies(path, &metadata, side)? {
+            continue;
+        }
+        if metadata.option.as_ref().is_some_and(|option| {
+            option.optional == Some(true) && option.default.unwrap_or(false) != *chosen
+        }) {
+            let mut value: toml::Value = toml::from_str(&text)?;
+            value
+                .get_mut("option")
+                .and_then(toml::Value::as_table_mut)
+                .context("option metadata is not a table")?
+                .insert("default".to_owned(), toml::Value::Boolean(*chosen));
+            source.write_atomic(path, toml::to_string(&value)?.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use sha1::{Digest, Sha1};
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn carries_selected_and_declined_optional_choices() {
+        let base = TempDir::new().unwrap();
+        let target = TempDir::new().unwrap();
+        for root in [base.path(), target.path()] {
+            fs::create_dir_all(root.join("mods/common")).unwrap();
+        }
+        for (name, chosen) in [("selected", true), ("declined", false)] {
+            let stem =
+                format!("name = '{name}'\nfilename = '{name}.jar'\n[option]\noptional = true\n");
+            fs::write(
+                base.path().join(format!("mods/common/{name}.pw.toml")),
+                &stem,
+            )
+            .unwrap();
+            let target_contents = if chosen {
+                stem
+            } else {
+                format!("{stem}default = true\n")
+            };
+            fs::write(
+                target.path().join(format!("mods/common/{name}.pw.toml")),
+                target_contents,
+            )
+            .unwrap();
+        }
+        let manifest = Manifest {
+            format: "bkmpw:1".into(),
+            side: Side::Client,
+            files: vec![ManagedFile {
+                name: "selected".into(),
+                path: "mods/selected.jar".into(),
+                sha256: "a".repeat(64),
+            }],
+        };
+        let base = SafeRoot::open(base.path()).unwrap();
+        let target = SafeRoot::open(target.path()).unwrap();
+        let choices = optional_choices(&base, Side::Client, &manifest).unwrap();
+        assert_eq!(choices.len(), 2);
+        apply_optional_choices(&target, &choices, Side::Client).unwrap();
+        for (name, chosen) in [("selected", true), ("declined", false)] {
+            let text = String::from_utf8(
+                target
+                    .required_file(&format!("mods/common/{name}.pw.toml"))
+                    .unwrap(),
+            )
+            .unwrap();
+            let value: toml::Value = toml::from_str(&text).unwrap();
+            assert_eq!(value["option"]["default"].as_bool(), Some(chosen));
+        }
+    }
 
     #[test]
     fn adopts_only_verified_side_files_and_preserves_private_files() {

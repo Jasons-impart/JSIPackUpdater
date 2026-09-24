@@ -1,4 +1,5 @@
 use crate::planner::validate_source_paths;
+use crate::safe_fs::SafeRoot;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -282,6 +283,79 @@ struct BlobResponse {
 }
 
 impl GitHub {
+    /// Reuse a persisted snapshot only after checking every cached file against
+    /// the authoritative Git tree for the resolved full commit SHA.
+    pub fn fetch_snapshot_cached(&self, reference: &str, cache_path: &Path) -> Result<Snapshot> {
+        if reference.is_empty() || reference.chars().any(char::is_control) {
+            bail!("invalid target reference");
+        }
+        let budget = FetchBudget::new();
+        let commit: CommitResponse = self.api_json(
+            &["repos", &self.owner, &self.repo, "commits", reference],
+            &[],
+            &budget,
+        )?;
+        validate_sha(&commit.sha)?;
+        validate_sha(&commit.commit.tree.sha)?;
+        let files = self.fetch_tree(&commit.commit.tree.sha, &budget)?;
+        self.check_budget(&files)?;
+        let cache_root = SafeRoot::open(cache_path)?;
+        let cached_path = cache_path.join(&commit.sha);
+        if let Ok(cached) = SafeRoot::open(&cached_path)
+            && let Ok(paths) = cached.file_paths()
+            && paths.len() == files.len()
+            && paths.iter().all(|path| files.contains_key(path))
+        {
+            let output = TempDir::new()?;
+            let output_root = SafeRoot::open(output.path())?;
+            let mut valid = true;
+            for (path, entry) in &files {
+                let bytes = match cached.required_file(path) {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        valid = false;
+                        break;
+                    }
+                };
+                if entry.size.is_some_and(|size| size != bytes.len() as u64)
+                    || git_blob_sha(&bytes) != entry.sha
+                {
+                    valid = false;
+                    break;
+                }
+                output_root.write_atomic(path, bytes.as_slice())?;
+                #[cfg(unix)]
+                output_root
+                    .set_unix_mode(path, if entry.mode == "100755" { 0o755 } else { 0o644 })?;
+            }
+            if valid {
+                return Ok(Snapshot {
+                    commit_id: commit.sha,
+                    root: output,
+                    file_count: files.len(),
+                });
+            }
+        }
+        let snapshot = self.fetch_snapshot(&commit.sha)?;
+        if cache_root.ensure_dir(&commit.sha).is_ok()
+            && let Ok(cached) = SafeRoot::open(&cached_path)
+            && let Ok(paths) = cached.file_paths()
+        {
+            for path in paths {
+                if !files.contains_key(&path) {
+                    let _ = cached.remove_regular(&path);
+                }
+            }
+            if let Ok(snapshot_root) = SafeRoot::open(snapshot.root.path()) {
+                for path in files.keys() {
+                    if snapshot_root.copy_regular_to(path, &cached, path).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(snapshot)
+    }
     pub fn new(repository: &str, token: Option<String>) -> Result<Self> {
         Self::with_api(repository, token, "https://api.github.com/")
     }
@@ -975,6 +1049,60 @@ mod tests {
                 "/api/v3/repos/owner/repo"
             );
         }
+    }
+
+    #[test]
+    fn cached_snapshot_is_reused_only_after_git_blob_verification() {
+        let commit = "a".repeat(40);
+        let tree = "b".repeat(40);
+        let content = b"trusted";
+        let commit_body = serde_json::json!({"sha":commit,"commit":{"tree":{"sha":tree}}})
+            .to_string()
+            .into_bytes();
+        let tree_body = serde_json::json!({"truncated":false,"tree":[{"path":"file.txt","mode":"100755","type":"blob","sha":git_blob_sha(content),"size":content.len()}]}).to_string().into_bytes();
+        let archive_body = archive("prefix/file.txt", content);
+        let mut responses = Vec::new();
+        for fetch in 0..3 {
+            responses.push(("/commits/", commit_body.clone()));
+            responses.push(("/git/trees/", tree_body.clone()));
+            if fetch != 1 {
+                responses.push(("/commits/", commit_body.clone()));
+                responses.push(("/git/trees/", tree_body.clone()));
+                responses.push(("/tarball/", archive_body.clone()));
+            }
+        }
+        let (base, server) = serve(responses);
+        let github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        let cache = TempDir::new().unwrap();
+        let first = github.fetch_snapshot_cached(&commit, cache.path()).unwrap();
+        assert_eq!(
+            fs::read(first.root.path().join("file.txt")).unwrap(),
+            content
+        );
+        let second = github.fetch_snapshot_cached(&commit, cache.path()).unwrap();
+        assert_eq!(
+            fs::read(second.root.path().join("file.txt")).unwrap(),
+            content
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(second.root.path().join("file.txt"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o111,
+                0o111
+            );
+        }
+        fs::write(cache.path().join(&commit).join("file.txt"), b"tampered").unwrap();
+        let third = github.fetch_snapshot_cached(&commit, cache.path()).unwrap();
+        assert_eq!(
+            fs::read(third.root.path().join("file.txt")).unwrap(),
+            content
+        );
+        server.join().unwrap();
     }
 
     #[test]
