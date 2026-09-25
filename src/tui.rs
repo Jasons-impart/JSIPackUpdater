@@ -1,14 +1,16 @@
 use super::{RemoteArgs, run_remote_update};
 use anyhow::{Result, anyhow};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use jsipack_updater::managed::Side;
 use jsipack_updater::transaction;
 use jsipack_updater::updater::{ConflictResolution, UnresolvedConflicts};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use std::collections::VecDeque;
 use std::io::{self, Stdout};
@@ -85,8 +87,157 @@ impl Drop for Screen {
     }
 }
 
+fn instance_from_setup(original: &std::path::Path, displayed: &str, edited: bool) -> PathBuf {
+    if edited {
+        PathBuf::from(displayed)
+    } else {
+        original.to_path_buf()
+    }
+}
+
+fn configure(screen: &mut Screen, args: &mut RemoteArgs) -> Result<bool> {
+    let original_instance = args.instance.clone();
+    let mut instance = args.instance.to_string_lossy().into_owned();
+    let mut instance_edited = false;
+    let mut target = args.target.clone();
+    let mut field = if instance.is_empty() { 0 } else { 1 };
+    let mut error = String::new();
+    loop {
+        screen.terminal.draw(|frame| {
+            let areas = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(5),
+                    Constraint::Length(3),
+                    Constraint::Min(1),
+                ])
+                .split(frame.area());
+            frame.render_widget(
+                Paragraph::new("JSIPackUpdater · 设置更新")
+                    .block(Block::default().borders(Borders::ALL)),
+                areas[0],
+            );
+            let side = match args.side {
+                Side::Client => "客户端",
+                Side::Server => "服务端",
+            };
+            let fields = [
+                format!("实例目录：{instance}"),
+                format!("目标 tag / commit：{target}"),
+                format!("实例侧别：{side}（←/→ 切换）"),
+            ];
+            let items: Vec<_> = fields
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let style = if index == field {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default()
+                    };
+                    ListItem::new(format!(
+                        "{} {value}",
+                        if index == field { ">" } else { " " }
+                    ))
+                    .style(style)
+                })
+                .collect();
+            frame.render_widget(
+                List::new(items).block(Block::default().borders(Borders::ALL)),
+                areas[1],
+            );
+            frame.render_widget(
+                Paragraph::new(error.as_str()).block(Block::default().borders(Borders::ALL)),
+                areas[2],
+            );
+            frame.render_widget(
+                Paragraph::new("Tab/↑/↓ 切换字段 · Enter 开始更新 · Esc 退出")
+                    .block(Block::default().borders(Borders::ALL)),
+                areas[3],
+            );
+        })?;
+        if let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            error.clear();
+            match key.code {
+                KeyCode::Esc => return Ok(false),
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return Ok(false);
+                }
+                KeyCode::Tab | KeyCode::Down => field = (field + 1) % 3,
+                KeyCode::BackTab | KeyCode::Up => field = (field + 2) % 3,
+                KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if field == 2 => {
+                    args.side = match args.side {
+                        Side::Client => Side::Server,
+                        Side::Server => Side::Client,
+                    };
+                }
+                KeyCode::Char('c') if field == 2 && key.modifiers.is_empty() => {
+                    args.side = Side::Client;
+                }
+                KeyCode::Char('s') if field == 2 && key.modifiers.is_empty() => {
+                    args.side = Side::Server;
+                }
+                KeyCode::Backspace if field == 0 => {
+                    instance.pop();
+                    instance_edited = true;
+                }
+                KeyCode::Backspace if field == 1 => {
+                    target.pop();
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    match field {
+                        0 => {
+                            instance.clear();
+                            instance_edited = true;
+                        }
+                        1 => target.clear(),
+                        _ => {}
+                    }
+                }
+                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    match field {
+                        0 => {
+                            instance.push(ch);
+                            instance_edited = true;
+                        }
+                        1 => target.push(ch),
+                        _ => {}
+                    }
+                }
+                KeyCode::Enter => {
+                    let instance_path =
+                        instance_from_setup(&original_instance, &instance, instance_edited);
+                    if instance_path.as_os_str().is_empty() {
+                        error = "请选择实例目录".into();
+                        field = 0;
+                    } else if !instance_path.is_dir() {
+                        error = "实例目录不存在".into();
+                        field = 0;
+                    } else if target.trim().is_empty() {
+                        error = "请输入目标 tag 或 commit".into();
+                        field = 1;
+                    } else {
+                        args.instance = instance_path;
+                        args.target = target.trim().to_owned();
+                        return Ok(true);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 pub fn run(mut args: RemoteArgs) -> Result<()> {
     let mut screen = Screen::open()?;
+    if (args.instance.as_os_str().is_empty() || args.target.is_empty())
+        && !configure(&mut screen, &mut args)?
+    {
+        return Ok(());
+    }
     if transaction::pending(&args.instance)? {
         loop {
             screen.terminal.draw(|frame| {
@@ -284,4 +435,20 @@ pub fn run(mut args: RemoteArgs) -> Result<()> {
         println!("更新完成\n{summary}");
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod setup_tests {
+    use super::instance_from_setup;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::PathBuf;
+
+    #[test]
+    fn untouched_instance_path_keeps_non_unicode_bytes_and_trailing_spaces() {
+        let original = PathBuf::from(OsString::from_vec(b"/tmp/instance\xff ".to_vec()));
+        let shown = original.to_string_lossy();
+        assert_eq!(instance_from_setup(&original, &shown, false), original);
+        assert_ne!(instance_from_setup(&original, &shown, true), original);
+    }
 }

@@ -19,10 +19,12 @@ enum Message {
 
 struct GuiApp {
     instance: String,
+    selected_instance: Option<PathBuf>,
     target: String,
     repo: String,
     token: String,
     bkmpw: String,
+    selected_bkmpw: Option<PathBuf>,
     side: Side,
     conflicts: ConflictChoice,
     resolutions: String,
@@ -37,10 +39,12 @@ impl Default for GuiApp {
     fn default() -> Self {
         Self {
             instance: String::new(),
+            selected_instance: None,
             target: String::new(),
             repo: "Jasons-impart/Create-Delight-Project-Rebirth".into(),
             token: String::new(),
             bkmpw: String::new(),
+            selected_bkmpw: None,
             side: Side::Client,
             conflicts: ConflictChoice::Stop,
             resolutions: String::new(),
@@ -54,6 +58,18 @@ impl Default for GuiApp {
 }
 
 impl GuiApp {
+    fn instance_path(&self) -> Option<PathBuf> {
+        self.selected_instance
+            .clone()
+            .or_else(|| (!self.instance.is_empty()).then(|| PathBuf::from(self.instance.as_str())))
+    }
+
+    fn bkmpw_path(&self) -> Option<PathBuf> {
+        self.selected_bkmpw
+            .clone()
+            .or_else(|| (!self.bkmpw.is_empty()).then(|| PathBuf::from(self.bkmpw.as_str())))
+    }
+
     fn append(&mut self, message: String) {
         self.messages.push_back(message);
         while self.messages.len() > 100 {
@@ -62,7 +78,11 @@ impl GuiApp {
     }
 
     fn start(&mut self, preview: bool, ctx: egui::Context) {
-        if self.instance.trim().is_empty() || self.target.trim().is_empty() {
+        let Some(instance) = self.instance_path() else {
+            self.append("请选择实例目录并填写目标 tag 或 commit".into());
+            return;
+        };
+        if self.target.trim().is_empty() {
             self.append("请选择实例目录并填写目标 tag 或 commit".into());
             return;
         }
@@ -103,10 +123,10 @@ impl GuiApp {
             .map(|(_, _, commit)| commit.clone())
             .unwrap_or(requested);
         let args = RemoteArgs {
-            instance: PathBuf::from(self.instance.trim()),
+            instance,
             target,
             side: self.side,
-            bkmpw: (!self.bkmpw.trim().is_empty()).then(|| PathBuf::from(self.bkmpw.trim())),
+            bkmpw: self.bkmpw_path(),
             repo,
             token,
             conflicts: self.conflicts,
@@ -164,11 +184,10 @@ impl GuiApp {
     }
 
     fn rollback(&mut self, ctx: egui::Context) {
-        if self.instance.trim().is_empty() {
+        let Some(instance) = self.instance_path() else {
             self.append("请先填写实例目录".into());
             return;
-        }
-        let instance = PathBuf::from(self.instance.trim());
+        };
         let (sender, receiver) = mpsc::channel();
         self.receiver = Some(receiver);
         self.running = true;
@@ -250,10 +269,23 @@ impl eframe::App for GuiApp {
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label("实例目录");
-                ui.add_enabled(
-                    !self.running,
-                    egui::TextEdit::singleline(&mut self.instance),
-                );
+                if ui
+                    .add_enabled(
+                        !self.running,
+                        egui::TextEdit::singleline(&mut self.instance),
+                    )
+                    .changed()
+                {
+                    self.selected_instance = None;
+                }
+                if ui
+                    .add_enabled(!self.running, egui::Button::new("选择文件夹…"))
+                    .clicked()
+                    && let Some(path) = rfd::FileDialog::new().pick_folder()
+                {
+                    self.instance = path.to_string_lossy().into_owned();
+                    self.selected_instance = Some(path);
+                }
             });
             ui.horizontal(|ui| {
                 ui.label("目标 tag / commit");
@@ -284,7 +316,20 @@ impl eframe::App for GuiApp {
             });
             ui.horizontal(|ui| {
                 ui.label("bkmpw 路径（留空使用随附版本）");
-                ui.text_edit_singleline(&mut self.bkmpw);
+                if ui
+                    .add_enabled(!self.running, egui::TextEdit::singleline(&mut self.bkmpw))
+                    .changed()
+                {
+                    self.selected_bkmpw = None;
+                }
+                if ui
+                    .add_enabled(!self.running, egui::Button::new("选择文件…"))
+                    .clicked()
+                    && let Some(path) = rfd::FileDialog::new().pick_file()
+                {
+                    self.bkmpw = path.to_string_lossy().into_owned();
+                    self.selected_bkmpw = Some(path);
+                }
             });
             ui.horizontal(|ui| {
                 ui.label("实例侧别");
@@ -369,4 +414,27 @@ pub fn run() -> Result<()> {
         }),
     )
     .map_err(|error| anyhow::anyhow!("opening updater window: {error}"))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::GuiApp;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::PathBuf;
+
+    #[test]
+    fn selected_paths_keep_non_unicode_bytes() {
+        let instance = PathBuf::from(OsString::from_vec(b"/tmp/instance\xff".to_vec()));
+        let bkmpw = PathBuf::from(OsString::from_vec(b"/tmp/bkmpw\xfe".to_vec()));
+        let app = GuiApp {
+            instance: instance.to_string_lossy().into_owned(),
+            selected_instance: Some(instance.clone()),
+            bkmpw: bkmpw.to_string_lossy().into_owned(),
+            selected_bkmpw: Some(bkmpw.clone()),
+            ..GuiApp::default()
+        };
+        assert_eq!(app.instance_path(), Some(instance));
+        assert_eq!(app.bkmpw_path(), Some(bkmpw));
+    }
 }

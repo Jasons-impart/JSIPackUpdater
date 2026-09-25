@@ -32,10 +32,10 @@ enum Command {
     /// Show update progress in a terminal window.
     Tui {
         #[arg(long)]
-        instance: PathBuf,
+        instance: Option<PathBuf>,
         #[arg(long)]
-        target: String,
-        #[arg(long, value_enum)]
+        target: Option<String>,
+        #[arg(long, value_enum, default_value = "client")]
         side: Side,
         #[arg(long)]
         bkmpw: Option<PathBuf>,
@@ -202,8 +202,8 @@ fn main() -> Result<ExitCode> {
             resolve,
         } => {
             tui::run(RemoteArgs {
-                instance,
-                target,
+                instance: instance.unwrap_or_default(),
+                target: target.unwrap_or_default(),
                 side,
                 bkmpw,
                 repo,
