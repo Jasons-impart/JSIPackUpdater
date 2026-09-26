@@ -462,6 +462,7 @@ mod tests {
         let script = dir.path().join("fake-bkmpw");
         std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"completed\",\"ok\":true}'\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
         assert!(
             verify_protocol(&script)
                 .unwrap_err()
@@ -483,6 +484,7 @@ mod tests {
             let script = dir.path().join(format!("fake-bkmpw-{index}"));
             std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
             let error = run_with_timeout(
                 &script,
                 "protocol-version",
@@ -507,6 +509,7 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
         assert!(
             run_with_timeout(
                 &script,
@@ -554,6 +557,7 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
         let start = Instant::now();
         assert!(
             run_with_timeout(
@@ -576,6 +580,7 @@ mod tests {
         let script = dir.path().join("queued-bkmpw");
         std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"progress\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":3,\"event\":\"completed\",\"ok\":true}'\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
         let error = run_with_timeout(
             &script,
             "protocol-version",
