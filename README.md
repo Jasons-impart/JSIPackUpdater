@@ -13,7 +13,8 @@ jsipack-updater preview-remote --instance /path/to/minecraft --target v2.0.0.0-t
 # 更新客户端；服务端改用 --side server
 jsipack-updater update-remote --instance /path/to/minecraft --side client --target v2.0.0.0-test2
 
-# 终端界面启动后填写实例和目标，侧别默认客户端；也可继续传入这些参数
+# 终端界面：选择检测到的实例与最近发布版本；Tab 补全路径，F2 浏览目录
+# 侧别默认客户端；也可继续通过参数预填
 jsipack-updater tui
 # GUI（GUI 版本需启用 gui 功能构建），实例目录可用系统文件夹选择框选取
 jsipack-updater gui
