@@ -265,6 +265,13 @@ struct CommitResponse {
 }
 
 #[derive(Deserialize)]
+struct ReleaseTag {
+    tag_name: String,
+    #[serde(default)]
+    draft: bool,
+}
+
+#[derive(Deserialize)]
 struct CommitData {
     tree: TreeSha,
 }
@@ -401,6 +408,26 @@ impl GitHub {
         }
         self.limits = limits;
         Ok(())
+    }
+
+    /// List recent published releases for interactive target selection.
+    pub fn release_tags(&self) -> Result<Vec<String>> {
+        let releases: Vec<ReleaseTag> = self.api_json(
+            &["repos", &self.owner, &self.repo, "releases"],
+            &[("per_page", "30")],
+            &FetchBudget::new(),
+        )?;
+        let mut tags = Vec::new();
+        for release in releases {
+            if !release.draft
+                && !release.tag_name.is_empty()
+                && !release.tag_name.chars().any(char::is_control)
+                && !tags.contains(&release.tag_name)
+            {
+                tags.push(release.tag_name);
+            }
+        }
+        Ok(tags)
     }
 
     pub fn fetch_snapshot(&self, reference: &str) -> Result<Snapshot> {
@@ -1029,6 +1056,24 @@ mod tests {
             tar.append_data(&mut header, path, *content).unwrap();
         }
         tar.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn release_tags_keep_published_unique_targets() {
+        let releases = serde_json::json!([
+            {"tag_name":"v2-test2","draft":false},
+            {"tag_name":"v2-test1","draft":false},
+            {"tag_name":"v2-test2","draft":false},
+            {"tag_name":"draft","draft":true},
+            {"tag_name":"bad\nname","draft":false}
+        ]);
+        let (base, server) = serve(vec![(
+            "/releases?per_page=30",
+            serde_json::to_vec(&releases).unwrap(),
+        )]);
+        let github = GitHub::with_api("owner/repo", None, &base).unwrap();
+        assert_eq!(github.release_tags().unwrap(), ["v2-test2", "v2-test1"]);
+        server.join().unwrap();
     }
 
     #[test]
