@@ -372,6 +372,7 @@ pub fn update_with_progress(
             progress(message.clone());
         }
     })?;
+    seed_managed_artifacts(&instance, &artifacts, &old_manifest, &old_conflicts)?;
     progress("Downloading managed artifacts".into());
     bkmpw::sync(
         bkmpw_executable,
@@ -778,6 +779,36 @@ pub fn update_with_progress(
         managed_files: new_manifest.files.len(),
         local_overrides: overrides,
     })
+}
+
+fn seed_managed_artifacts(
+    instance: &SafeRoot,
+    artifacts: &SafeRoot,
+    manifest: &Manifest,
+    conflicts: &[crate::managed::AdoptionConflict],
+) -> Result<()> {
+    let conflicted: BTreeSet<_> = conflicts.iter().map(|item| item.path.as_str()).collect();
+    for file in &manifest.files {
+        if conflicted.contains(file.path.as_str()) {
+            continue;
+        }
+        if !instance.copy_regular_to(&file.path, artifacts, &file.path)? {
+            bail!(
+                "managed file disappeared during update preparation: {}",
+                file.path
+            );
+        }
+        match artifacts.hash_artifact(&file.path)? {
+            crate::safe_fs::LocalArtifact::File(hashes)
+                if hashes.sha256.eq_ignore_ascii_case(&file.sha256) => {}
+            _ => bail!(
+                "managed file changed during update preparation: {}",
+                file.path
+            ),
+        }
+    }
+    artifacts.write_atomic("packwiz.json", serde_json::to_vec(manifest)?.as_slice())?;
+    Ok(())
 }
 
 #[path = "updater_ordinary.rs"]

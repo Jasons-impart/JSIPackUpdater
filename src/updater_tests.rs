@@ -118,6 +118,48 @@ esac
 }
 
 #[test]
+fn seeds_verified_managed_files_without_copying_local_modifications() {
+    let root = TempDir::new().unwrap();
+    let instance_path = root.path().join("instance");
+    let artifacts_path = root.path().join("artifacts");
+    fs::create_dir_all(instance_path.join("mods")).unwrap();
+    fs::create_dir_all(&artifacts_path).unwrap();
+    fs::write(instance_path.join("mods/good.jar"), b"good").unwrap();
+    fs::write(instance_path.join("mods/changed.jar"), b"local change").unwrap();
+    let manifest = Manifest {
+        format: "bkmpw:1".into(),
+        side: Side::Server,
+        files: vec![
+            crate::managed::ManagedFile {
+                name: "good".into(),
+                path: "mods/good.jar".into(),
+                sha256: format!("{:x}", Sha256::digest(b"good")),
+            },
+            crate::managed::ManagedFile {
+                name: "changed".into(),
+                path: "mods/changed.jar".into(),
+                sha256: format!("{:x}", Sha256::digest(b"original")),
+            },
+        ],
+    };
+    let conflicts = [crate::managed::AdoptionConflict {
+        path: "mods/changed.jar".into(),
+        reason: "managed_file_changed",
+    }];
+    let instance = SafeRoot::open(&instance_path).unwrap();
+    let artifacts = SafeRoot::open(&artifacts_path).unwrap();
+    seed_managed_artifacts(&instance, &artifacts, &manifest, &conflicts).unwrap();
+    assert_eq!(
+        fs::read(artifacts_path.join("mods/good.jar")).unwrap(),
+        b"good"
+    );
+    assert!(!artifacts_path.join("mods/changed.jar").exists());
+    let seeded: Manifest =
+        serde_json::from_slice(&fs::read(artifacts_path.join("packwiz.json")).unwrap()).unwrap();
+    assert_eq!(seeded.files.len(), 2);
+}
+
+#[test]
 fn upgrades_and_removes_managed_jar_without_touching_private_jar() {
     let fixture = Fixture::new();
     let report = fixture.run().unwrap();
