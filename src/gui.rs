@@ -1,4 +1,4 @@
-use super::{ConflictChoice, RemoteArgs, parse_resolutions, run_remote_preview, run_remote_update};
+use super::{ConflictChoice, RemoteArgs, run_remote_preview, run_remote_update};
 use anyhow::Result;
 use eframe::egui;
 use jsipack_updater::managed::Side;
@@ -13,10 +13,41 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+#[path = "gui_conflicts.rs"]
+mod conflicts;
+use conflicts::ConflictPanel;
+
+fn failure_hint(error: &str) -> &'static str {
+    if error.contains("changes Minecraft/NeoForge") {
+        "所选版本更换了 Minecraft 或 NeoForge，需要新建实例。请选择其他版本，或安装新的整合包。"
+    } else if error.contains("unfinished update") {
+        "上次更新尚未完成，请先恢复更新前的文件，再重试。"
+    } else if error.contains("another update is using") {
+        "另一个更新器正在使用这个实例，请等待它结束后重试。"
+    } else if error.contains("rate limit") {
+        "GitHub 请求次数已达上限。请按日志中的时间重试，或在高级设置中填写令牌。"
+    } else {
+        "操作未完成，可以重试。请展开详细日志查看原因；出现恢复按钮时，请先恢复更新前的文件。"
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Operation {
+    Preview,
+    Update,
+    Rollback,
+}
+
 enum Message {
     Progress(String),
     Complete(Result<String, String>),
-    Conflicts(String, String, String, String),
+    Conflicts {
+        commit: String,
+        paths: Vec<String>,
+        details: String,
+        repo: String,
+        target: String,
+    },
     WorkerStopped,
 }
 
@@ -32,7 +63,7 @@ struct Inspection {
     resolved: PathBuf,
     announce: bool,
     side_revision: u64,
-    result: Result<(ReleaseInfo, Side), String>,
+    result: Result<(ReleaseInfo, Side, Option<Side>), String>,
     pending: Result<bool, String>,
 }
 
@@ -45,8 +76,7 @@ struct GuiApp {
     bkmpw: String,
     selected_bkmpw: Option<PathBuf>,
     side: Side,
-    conflicts: ConflictChoice,
-    resolutions: String,
+    conflicts: ConflictPanel,
     messages: VecDeque<String>,
     receiver: Option<Receiver<Message>>,
     worker: Option<JoinHandle<()>>,
@@ -66,6 +96,9 @@ struct GuiApp {
     inspection_request: u64,
     inspecting: bool,
     side_revision: u64,
+    saved_side: Option<Side>,
+    operation: Operation,
+    failed: bool,
     pinned_target: Option<(String, String, String)>,
 }
 
@@ -81,8 +114,7 @@ impl Default for GuiApp {
             bkmpw: String::new(),
             selected_bkmpw: None,
             side: Side::Client,
-            conflicts: ConflictChoice::Stop,
-            resolutions: String::new(),
+            conflicts: ConflictPanel::default(),
             messages: VecDeque::new(),
             receiver: None,
             worker: None,
@@ -102,6 +134,9 @@ impl Default for GuiApp {
             inspection_request: 0,
             inspecting: false,
             side_revision: 0,
+            saved_side: None,
+            operation: Operation::Update,
+            failed: false,
             pinned_target: None,
         }
     }
@@ -149,9 +184,9 @@ impl GuiApp {
         self.instance = path.to_string_lossy().into_owned();
         self.selected_instance = Some(path.clone());
         self.installed = None;
+        self.saved_side = None;
         self.pending = false;
-        self.pinned_target = None;
-        self.resolutions.clear();
+        self.reset_decisions();
         self.status = "正在识别实例…".into();
         self.inspect_instance(ctx, true);
     }
@@ -178,18 +213,19 @@ impl GuiApp {
             let result = (|| -> Result<_> {
                 let root = SafeRoot::open(&resolved)?;
                 let info = load_release_info(&root)?;
-                let side = match root.read(".jsipack-updater/side.json")? {
-                    LocalFile::File(bytes) => serde_json::from_slice(&bytes)?,
-                    LocalFile::Missing => {
-                        if matches!(root.read("server.properties")?, LocalFile::File(_)) {
-                            Side::Server
-                        } else {
-                            Side::Client
-                        }
-                    }
+                let saved_side: Option<Side> = match root.read(".jsipack-updater/side.json")? {
+                    LocalFile::File(bytes) => Some(serde_json::from_slice(&bytes)?),
+                    LocalFile::Missing => None,
                     LocalFile::Obstacle => anyhow::bail!("实例侧别记录不是普通文件"),
                 };
-                Ok((info, side))
+                let side = if let Some(side) = saved_side {
+                    side
+                } else if matches!(root.read("server.properties")?, LocalFile::File(_)) {
+                    Side::Server
+                } else {
+                    Side::Client
+                };
+                Ok((info, side, saved_side))
             })()
             .map_err(|error| format!("{error:#}"));
             let _ = sender.send(SetupMessage::Installed(Inspection {
@@ -254,11 +290,19 @@ impl GuiApp {
                         }
                     }
                     match inspection.result {
-                        Ok((info, side)) => {
+                        Ok((info, side, saved_side)) => {
                             self.installed = Some(info);
-                            if inspection.announce && inspection.side_revision == self.side_revision
+                            self.saved_side = saved_side;
+                            let previous_side = self.side;
+                            if saved_side.is_some()
+                                || (inspection.announce
+                                    && inspection.side_revision == self.side_revision)
                             {
                                 self.side = side;
+                            }
+                            if self.side != previous_side {
+                                self.reset_decisions();
+                                self.side_revision += 1;
                             }
                             if inspection.announce {
                                 self.status = if self.pending {
@@ -305,37 +349,19 @@ impl GuiApp {
         }
     }
 
-    fn start(&mut self, preview: bool, ctx: egui::Context) {
-        let Some(instance) = self.instance_path() else {
-            self.append("请选择实例目录并填写目标 tag 或 commit".into());
-            return;
-        };
+    fn reset_decisions(&mut self) {
+        self.pinned_target = None;
+        self.conflicts = ConflictPanel::default();
+        self.failed = false;
+    }
+
+    fn remote_args(&self) -> Option<RemoteArgs> {
+        let instance = self.instance_path()?;
         if self.target.trim().is_empty() {
-            self.append("请选择实例目录并填写目标 tag 或 commit".into());
-            return;
+            return None;
         }
-        let token = self.token();
-        let values: Vec<_> = self
-            .resolutions
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect();
-        let resolutions = match parse_resolutions(&values) {
-            Ok(value) => value,
-            Err(error) => {
-                self.append(format!("冲突选择无效：{error}"));
-                return;
-            }
-        };
         let requested = self.target.trim().to_owned();
         let repo = self.repo.trim().to_owned();
-        let requested_for_worker = requested.clone();
-        let repo_for_worker = repo.clone();
-        if preview {
-            self.pinned_target = None;
-        }
         let target = self
             .pinned_target
             .as_ref()
@@ -344,19 +370,34 @@ impl GuiApp {
             })
             .map(|(_, _, commit)| commit.clone())
             .unwrap_or(requested);
-        let args = RemoteArgs {
+        Some(RemoteArgs {
             instance,
             target,
             side: self.side,
             bkmpw: self.bkmpw_path(),
             repo,
-            token,
-            conflicts: self.conflicts,
-            resolutions,
+            token: self.token(),
+            conflicts: ConflictChoice::Stop,
+            resolutions: self.conflicts.resolutions.clone(),
+        })
+    }
+
+    fn start(&mut self, preview: bool, ctx: egui::Context) {
+        let Some(args) = self.remote_args() else {
+            self.status = "请先选择实例和目标版本。".into();
+            return;
         };
+        let requested_for_worker = self.target.trim().to_owned();
+        let repo_for_worker = args.repo.clone();
         let (sender, receiver) = mpsc::channel();
         self.receiver = Some(receiver);
         self.running = true;
+        self.operation = if preview {
+            Operation::Preview
+        } else {
+            Operation::Update
+        };
+        self.failed = false;
         self.inspection_request += 1;
         self.inspecting = false;
         self.status = if preview {
@@ -370,11 +411,11 @@ impl GuiApp {
             let result = if preview {
                 run_remote_preview(&args).map(|summary| {
                     format!(
-                        "源码文件预览（模组与生成文件冲突在更新准备时检查）\n{} → {}\n{} 项，{} 个冲突{}",
-                        summary.base_commit,
-                        summary.target_commit,
+                        "源码检查完成：{} 项，{} 个冲突。\n模组与生成文件冲突会在更新准备时检查。\n{} → {}{}",
                         summary.item_count,
                         summary.conflicts.len(),
+                        summary.base_commit,
+                        summary.target_commit,
                         if summary.conflicts.is_empty() {
                             String::new()
                         } else {
@@ -397,12 +438,13 @@ impl GuiApp {
                     if let Some(conflicts) = error.downcast_ref::<UnresolvedConflicts>()
                         && let Some(commit) = &conflicts.target_commit
                     {
-                        Message::Conflicts(
-                            commit.clone(),
-                            format!("{error:#}"),
-                            repo_for_worker,
-                            requested_for_worker,
-                        )
+                        Message::Conflicts {
+                            commit: commit.clone(),
+                            paths: conflicts.paths.clone(),
+                            details: format!("{error:#}"),
+                            repo: repo_for_worker,
+                            target: requested_for_worker,
+                        }
                     } else {
                         Message::Complete(Err(format!("{error:#}")))
                     }
@@ -421,6 +463,8 @@ impl GuiApp {
         let (sender, receiver) = mpsc::channel();
         self.receiver = Some(receiver);
         self.running = true;
+        self.operation = Operation::Rollback;
+        self.failed = false;
         self.status = "正在恢复更新前的文件…".into();
         self.inspection_request += 1;
         self.inspecting = false;
@@ -463,10 +507,7 @@ impl GuiApp {
                     Err(TryRecvError::Disconnected) => {
                         if self.running
                             && !incoming.iter().any(|message| {
-                                matches!(
-                                    message,
-                                    Message::Complete(_) | Message::Conflicts(_, _, _, _)
-                                )
+                                matches!(message, Message::Complete(_) | Message::Conflicts { .. })
                             })
                         {
                             incoming.push(Message::WorkerStopped);
@@ -484,8 +525,9 @@ impl GuiApp {
                     if let Some(worker) = self.worker.take() {
                         let _ = worker.join();
                     }
-                    if result.is_ok() {
-                        self.pinned_target = None;
+                    self.failed = result.is_err();
+                    if result.is_ok() && self.operation != Operation::Preview {
+                        self.reset_decisions();
                     }
                     self.status = match result {
                         Ok(summary) => {
@@ -493,23 +535,28 @@ impl GuiApp {
                             summary.lines().next().unwrap_or("操作完成").to_owned()
                         }
                         Err(error) => {
+                            let hint = failure_hint(&error).to_owned();
                             self.append(error);
-                            "操作未完成。请查看详细信息；有未完成事务时需先恢复更新前的文件。"
-                                .into()
+                            hint
                         }
                     };
                     self.inspect_instance(ctx.clone(), false);
                 }
-                Message::Conflicts(commit, details, origin_repo, origin_target) => {
+                Message::Conflicts {
+                    commit,
+                    paths,
+                    details,
+                    repo,
+                    target,
+                } => {
                     self.running = false;
                     if let Some(worker) = self.worker.take() {
                         let _ = worker.join();
                     }
-                    self.pinned_target = Some((origin_repo, origin_target, commit.clone()));
+                    self.pinned_target = Some((repo, target, commit));
+                    self.conflicts.receive(paths);
                     self.status = "发现文件冲突，请选择如何处理后继续更新。".into();
-                    self.append(format!(
-                        "目标已固定到 {commit}。填写逐项冲突后再点开始更新。\n{details}"
-                    ));
+                    self.append(details);
                 }
                 Message::WorkerStopped => {
                     self.running = false;
@@ -517,6 +564,7 @@ impl GuiApp {
                         let _ = worker.join();
                     }
                     self.status = "后台任务异常终止，请检查事务状态后重试。".into();
+                    self.failed = true;
                     self.inspect_instance(ctx.clone(), false);
                 }
             }
@@ -528,7 +576,8 @@ impl GuiApp {
                 .show(ui, |ui| {
                     ui.heading("JSIPackUpdater");
                     ui.label(&self.status);
-                    ui.label("选择实例 → 选择版本 → 开始更新");
+                    ui.label("选择实例、选择版本，然后开始更新");
+                    ui.small("更新前请关闭游戏或停止服务端。");
                     ui.separator();
                     ui.heading("1. 选择实例");
                     let mut chosen = None;
@@ -578,7 +627,7 @@ impl GuiApp {
                     }
                     ui.horizontal(|ui| {
                         ui.label("实例类型");
-                        ui.add_enabled_ui(!self.running, |ui| {
+                        ui.add_enabled_ui(!self.running && self.saved_side.is_none(), |ui| {
                             ui.radio_value(&mut self.side, Side::Client, "客户端");
                             ui.radio_value(&mut self.side, Side::Server, "服务端");
                         });
@@ -617,16 +666,14 @@ impl GuiApp {
                             repo == self.repo.trim() && target == self.target.trim()
                         })
                         .map(|(_, _, commit)| commit.clone());
-                    if let Some(commit) = pinned_display {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("本次冲突重试固定到 {commit}"));
-                            if ui.button("重新解析目标 tag").clicked() {
-                                self.pinned_target = None;
-                            }
-                        });
-                    }
                     ui.collapsing("高级设置（通常无需修改）", |ui| {
                         ui.add_enabled_ui(!self.running, |ui| {
+                            if let Some(commit) = pinned_display {
+                                ui.label(format!("本次更新固定到：{commit}"));
+                                if ui.button("重新检查所选版本").clicked() {
+                                    self.reset_decisions();
+                                }
+                            }
                             ui.horizontal(|ui| {
                                 ui.label("指定 tag / commit");
                                 ui.text_edit_singleline(&mut self.target);
@@ -670,28 +717,18 @@ impl GuiApp {
                         self.release_status = "仓库已变更，请刷新版本列表".into();
                     }
                     if (self.repo.clone(), self.target.clone(), self.side) != selection_before {
-                        self.pinned_target = None;
-                        self.resolutions.clear();
+                        self.reset_decisions();
+                        if self.installed.is_some() {
+                            self.status =
+                                "已更改更新目标。请关闭游戏或停止服务端，再开始更新。".into();
+                        }
                     }
                     if self.side != selection_before.2 {
                         self.side_revision += 1;
                     }
-                    ui.horizontal(|ui| {
-                        ui.label("文件冲突");
-                        ui.radio_value(&mut self.conflicts, ConflictChoice::Stop, "暂停");
-                        ui.radio_value(
-                            &mut self.conflicts,
-                            ConflictChoice::UseTarget,
-                            "全部使用新版",
-                        );
-                        ui.radio_value(
-                            &mut self.conflicts,
-                            ConflictChoice::KeepLocal,
-                            "全部保留本地",
-                        );
+                    ui.add_enabled_ui(!self.running && !self.pending, |ui| {
+                        self.conflicts.show(ui);
                     });
-                    ui.label("逐项冲突（每行 PATH=target、PATH=local 或 PATH=manual:FILE）");
-                    ui.add(egui::TextEdit::multiline(&mut self.resolutions).desired_rows(3));
                     ui.horizontal(|ui| {
                         let ready = !self.running
                             && !self.inspecting
@@ -699,20 +736,41 @@ impl GuiApp {
                             && !self.pending
                             && !self.target.trim().is_empty();
                         if ui
-                            .add_enabled(ready, egui::Button::new("查看更新内容"))
+                            .add_enabled(
+                                ready,
+                                egui::Button::new(
+                                    if self.failed && self.operation == Operation::Preview {
+                                        "重新检查"
+                                    } else {
+                                        "查看更新内容"
+                                    },
+                                ),
+                            )
                             .clicked()
                         {
                             self.start(true, ctx.clone());
                         }
                         if ui
-                            .add_enabled(ready, egui::Button::new("开始更新"))
+                            .add_enabled(
+                                ready && self.conflicts.ready(),
+                                egui::Button::new(if !self.conflicts.paths.is_empty() {
+                                    "继续更新"
+                                } else if self.failed && self.operation == Operation::Update {
+                                    "重试更新"
+                                } else {
+                                    "开始更新"
+                                }),
+                            )
                             .clicked()
                         {
                             self.start(false, ctx.clone());
                         }
                         if self.pending
                             && ui
-                                .add_enabled(!self.running, egui::Button::new("恢复更新前的文件"))
+                                .add_enabled(
+                                    !self.running && !self.inspecting,
+                                    egui::Button::new("恢复更新前的文件"),
+                                )
                                 .clicked()
                         {
                             self.rollback(ctx.clone());
@@ -821,6 +879,7 @@ mod setup_tests {
                         neoforge_version: "21.1.242".into(),
                     },
                     Side::Server,
+                    None,
                 )),
             })
         };
@@ -885,11 +944,27 @@ pub fn run() -> Result<()> {
                     .push("droid-cjk".into());
             }
             creation.egui_ctx.set_fonts(fonts);
+            creation.egui_ctx.style_mut(|style| {
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Body, egui::FontId::proportional(16.0));
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Button, egui::FontId::proportional(16.0));
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Heading, egui::FontId::proportional(22.0));
+                style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+            });
             Ok(Box::<GuiApp>::default())
         }),
     )
     .map_err(|error| anyhow::anyhow!("opening updater window: {error}"))
 }
+
+#[cfg(test)]
+#[path = "gui_tests.rs"]
+mod interaction_tests;
 
 #[cfg(all(test, unix))]
 mod tests {
