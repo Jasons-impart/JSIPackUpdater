@@ -15,6 +15,7 @@ use std::process::ExitCode;
 
 #[cfg(feature = "gui")]
 mod gui;
+mod instance_paths;
 mod tui;
 
 #[derive(Parser)]

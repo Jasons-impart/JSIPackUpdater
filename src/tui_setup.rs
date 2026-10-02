@@ -10,8 +10,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
-#[path = "tui_paths.rs"]
-mod paths;
+use crate::instance_paths as paths;
 use paths::{is_instance, selected_path, suggestion_worker};
 
 #[path = "tui_browser.rs"]
