@@ -190,6 +190,11 @@ fn parse_resolutions(values: &[String]) -> Result<BTreeMap<String, ConflictResol
 }
 
 fn main() -> Result<ExitCode> {
+    #[cfg(feature = "gui")]
+    if std::env::args_os().nth(1).is_none() {
+        gui::run()?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let Cli { command } = Cli::parse();
     match command {
         Command::Tui {

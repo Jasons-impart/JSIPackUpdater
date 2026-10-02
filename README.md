@@ -23,7 +23,7 @@ jsipack-updater gui
 jsipack-updater rollback --instance /path/to/minecraft
 ```
 
-GUI 会列出检测到的实例，或用系统文件夹选择框选取；选择启动器实例外层目录时，会识别其中的 `minecraft` / `.minecraft`。识别后显示当前整合包、Minecraft 和 NeoForge 版本，并自动读取保存的实例类型（首次根据服务端文件推荐，可自行调整）。发布版本在后台加载，可直接从下拉列表选择。仓库、令牌、工具路径和手动指定 commit 收在高级设置中。
+带 GUI 的构建不传参数时直接打开窗口，也可使用 `gui` 子命令。GUI 会列出检测到的实例，或用系统文件夹选择框选取；选择启动器实例外层目录时，会识别其中的 `minecraft` / `.minecraft`。识别后显示当前整合包、Minecraft 和 NeoForge 版本，并自动读取保存的实例类型（首次根据服务端文件推荐，可自行调整）。发布版本在后台加载，可直接从下拉列表选择。仓库、令牌、工具路径和手动指定 commit 收在高级设置中。
 
 更新默认访问公开仓库 `Jasons-impart/Create-Delight-Project-Rebirth`；可以用 `--repo owner/name` 指定其他仓库。GitHub 限流时可设置 `GITHUB_TOKEN`，或传 `--token-stdin` 从标准输入/隐藏终端输入读取令牌。令牌不会作为命令行参数传递。
 
