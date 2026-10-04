@@ -401,6 +401,7 @@ struct PreviewSummary {
     target_commit: String,
     item_count: usize,
     conflicts: Vec<String>,
+    mods: Vec<jsipack_updater::managed::ModChange>,
 }
 
 fn run_remote_update(
@@ -462,6 +463,7 @@ fn run_remote_preview(args: &RemoteArgs) -> Result<PreviewSummary> {
     }
     let plan = plan_roots_checked(&base_root, &target_root, &instance_root, &check)?;
     Ok(PreviewSummary {
+        mods: jsipack_updater::managed::mod_changes(&base_root, &target_root, args.side)?,
         base_commit: base.commit_id,
         target_commit: destination.commit_id,
         item_count: plan.items.len(),

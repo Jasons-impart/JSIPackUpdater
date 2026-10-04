@@ -1,4 +1,4 @@
-use super::{ConflictChoice, RemoteArgs, run_remote_preview, run_remote_update};
+use super::{ConflictChoice, PreviewSummary, RemoteArgs, run_remote_preview, run_remote_update};
 use anyhow::Result;
 use eframe::egui;
 use jsipack_updater::managed::Side;
@@ -16,6 +16,9 @@ use std::time::Duration;
 #[path = "gui_conflicts.rs"]
 mod conflicts;
 use conflicts::ConflictPanel;
+
+#[path = "gui_mod_changes.rs"]
+mod mod_changes;
 
 fn failure_hint(error: &str) -> &'static str {
     if error.contains("changes Minecraft/NeoForge") {
@@ -41,6 +44,11 @@ enum Operation {
 enum Message {
     Progress(String),
     Complete(Result<String, String>),
+    Preview {
+        summary: PreviewSummary,
+        repo: String,
+        target: String,
+    },
     Conflicts {
         commit: String,
         paths: Vec<String>,
@@ -100,6 +108,7 @@ struct GuiApp {
     operation: Operation,
     failed: bool,
     pinned_target: Option<(String, String, String)>,
+    preview: Option<PreviewSummary>,
 }
 
 impl Default for GuiApp {
@@ -138,6 +147,7 @@ impl Default for GuiApp {
             operation: Operation::Update,
             failed: false,
             pinned_target: None,
+            preview: None,
         }
     }
 }
@@ -351,6 +361,7 @@ impl GuiApp {
 
     fn reset_decisions(&mut self) {
         self.pinned_target = None;
+        self.preview = None;
         self.conflicts = ConflictPanel::default();
         self.failed = false;
     }
@@ -407,10 +418,13 @@ impl GuiApp {
         }
         .into();
         self.messages.clear();
+        if preview {
+            self.preview = None;
+        }
         self.worker = Some(std::thread::spawn(move || {
             let result = if preview {
                 run_remote_preview(&args).map(|summary| {
-                    format!(
+                    let text = format!(
                         "源码检查完成：{} 项，{} 个冲突。\n模组与生成文件冲突会在更新准备时检查。\n{} → {}{}",
                         summary.item_count,
                         summary.conflicts.len(),
@@ -421,7 +435,13 @@ impl GuiApp {
                         } else {
                             format!("\n{}", summary.conflicts.join("\n"))
                         }
-                    )
+                    );
+                    let _ = sender.send(Message::Preview {
+                        summary,
+                        repo: repo_for_worker.clone(),
+                        target: requested_for_worker.clone(),
+                    });
+                    text
                 })
             } else {
                 let progress = sender.clone();
@@ -520,6 +540,14 @@ impl GuiApp {
         for message in incoming {
             match message {
                 Message::Progress(line) => self.append(line),
+                Message::Preview {
+                    summary,
+                    repo,
+                    target,
+                } => {
+                    self.pinned_target = Some((repo, target, summary.target_commit.clone()));
+                    self.preview = Some(summary);
+                }
                 Message::Complete(result) => {
                     self.running = false;
                     if let Some(worker) = self.worker.take() {
@@ -778,6 +806,9 @@ impl GuiApp {
                     });
                     if self.running || self.inspecting {
                         ui.spinner();
+                    }
+                    if let Some(preview) = &self.preview {
+                        mod_changes::show(ui, &preview.mods);
                     }
                     ui.separator();
                     ui.collapsing("详细日志", |ui| {
