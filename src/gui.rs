@@ -1,12 +1,12 @@
 use super::{ConflictChoice, PreviewSummary, RemoteArgs, run_remote_preview, run_remote_update};
 use anyhow::Result;
 use eframe::egui;
-use jsipack_updater::managed::Side;
-use jsipack_updater::safe_fs::{LocalFile, SafeRoot};
-use jsipack_updater::source::GitHub;
-use jsipack_updater::transaction;
-use jsipack_updater::updater::UnresolvedConflicts;
-use jsipack_updater::version::{ReleaseInfo, load_release_info};
+use minecraft_modpack_updater::managed::Side;
+use minecraft_modpack_updater::safe_fs::{LocalFile, SafeRoot};
+use minecraft_modpack_updater::source::GitHub;
+use minecraft_modpack_updater::transaction;
+use minecraft_modpack_updater::updater::UnresolvedConflicts;
+use minecraft_modpack_updater::version::{ReleaseInfo, load_release_info};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -602,7 +602,7 @@ impl GuiApp {
             egui::ScrollArea::vertical()
                 .id_salt("update-form")
                 .show(ui, |ui| {
-                    ui.heading("JSIPackUpdater");
+                    ui.heading("Minecraft Modpack Updater");
                     ui.label(&self.status);
                     ui.label("选择实例、选择版本，然后开始更新");
                     ui.small("更新前请关闭游戏或停止服务端。");
@@ -832,8 +832,8 @@ impl GuiApp {
 #[cfg(test)]
 mod setup_tests {
     use super::{GuiApp, Inspection, SetupMessage};
-    use jsipack_updater::managed::Side;
-    use jsipack_updater::version::ReleaseInfo;
+    use minecraft_modpack_updater::managed::Side;
+    use minecraft_modpack_updater::version::ReleaseInfo;
 
     #[test]
     fn stale_release_requests_cannot_change_selected_version() {
@@ -958,7 +958,7 @@ pub fn run() -> Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "JSIPackUpdater",
+        "Minecraft Modpack Updater",
         options,
         Box::new(|creation| {
             let mut fonts = egui::FontDefinitions::default();

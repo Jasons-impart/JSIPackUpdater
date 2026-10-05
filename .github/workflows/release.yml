@@ -59,23 +59,23 @@ jobs:
           EXPECTED_SHA: ${{ matrix.bkmpw_sha256 }}
         run: |
           mkdir -p dist
-          cp "target/$TARGET/release/jsipack-updater$SUFFIX" "dist/jsipack-updater$SUFFIX"
+          cp "target/$TARGET/release/minecraft-modpack-updater$SUFFIX" "dist/minecraft-modpack-updater$SUFFIX"
           cp assets/DroidSansFallbackFull.COPYRIGHT assets/Apache-2.0.txt assets/BroKnowMyPackwiz.LICENSE dist/
           asset="bkmpw-v0.2.5-$TARGET$SUFFIX"
           gh release download v0.2.5 --repo bro-know-my-org/BroKnowMyPackwiz --pattern "$asset" --dir dist
           python -c 'import hashlib,os,pathlib; p=pathlib.Path("dist")/("bkmpw-v0.2.5-"+os.environ["TARGET"]+os.environ["SUFFIX"]); actual=hashlib.sha256(p.read_bytes()).hexdigest(); expected=os.environ["EXPECTED_SHA"]; assert actual==expected,(actual,expected); p.rename(p.with_name("bkmpw"+os.environ["SUFFIX"]))'
-          chmod +x "dist/bkmpw$SUFFIX" "dist/jsipack-updater$SUFFIX"
+          chmod +x "dist/bkmpw$SUFFIX" "dist/minecraft-modpack-updater$SUFFIX"
           "dist/bkmpw$SUFFIX" --jsonl protocol-version
       - name: Archive portable bundle
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          python -c 'import os,pathlib,zipfile; p=pathlib.Path("dist"); out=pathlib.Path("jsipack-updater-"+os.environ["TARGET"]+".zip"); z=zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED); [z.write(f,f.name) for f in p.iterdir()]; z.close()'
+          python -c 'import os,pathlib,zipfile; p=pathlib.Path("dist"); out=pathlib.Path("minecraft-modpack-updater-"+os.environ["TARGET"]+".zip"); z=zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED); [z.write(f,f.name) for f in p.iterdir()]; z.close()'
       - uses: actions/upload-artifact@v4
         with:
-          name: jsipack-updater-${{ matrix.target }}
-          path: jsipack-updater-${{ matrix.target }}.zip
+          name: minecraft-modpack-updater-${{ matrix.target }}
+          path: minecraft-modpack-updater-${{ matrix.target }}.zip
           if-no-files-found: error
 
   publish:
@@ -88,7 +88,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: jsipack-updater-*
+          pattern: minecraft-modpack-updater-*
           merge-multiple: true
           path: dist
       - name: Publish archives

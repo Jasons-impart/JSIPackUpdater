@@ -1,4 +1,6 @@
-use jsipack_updater::planner::{Action, LocalFile, SourceChange, decide, plan_directories};
+use minecraft_modpack_updater::planner::{
+    Action, LocalFile, SourceChange, decide, plan_directories,
+};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -363,7 +365,7 @@ fn cli_json_preview_reports_conflicts_without_writing() {
             "a".repeat(40)
         ),
     );
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_jsipack-updater"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_minecraft-modpack-updater"))
         .args(["preview", "--base-commit", &"a".repeat(40), "--base-tree"])
         .arg(&base)
         .arg("--target-tree")
@@ -396,7 +398,7 @@ fn cli_rejects_mismatched_base_commit_with_same_component_versions() {
             "a".repeat(40)
         ),
     );
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_jsipack-updater"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_minecraft-modpack-updater"))
         .args(["preview", "--base-commit", &"b".repeat(40), "--base-tree"])
         .arg(&base)
         .arg("--target-tree")
@@ -411,7 +413,7 @@ fn cli_rejects_mismatched_base_commit_with_same_component_versions() {
 
 #[test]
 fn component_change_stops_preview() {
-    use jsipack_updater::version::check_components;
+    use minecraft_modpack_updater::version::check_components;
     let fixture = TempDir::new().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
@@ -444,9 +446,9 @@ fn component_change_stops_preview() {
 
 #[test]
 fn descriptor_change_after_validation_invalidates_plan() {
-    use jsipack_updater::planner::plan_roots_checked;
-    use jsipack_updater::safe_fs::SafeRoot;
-    use jsipack_updater::version::check_components_roots;
+    use minecraft_modpack_updater::planner::plan_roots_checked;
+    use minecraft_modpack_updater::safe_fs::SafeRoot;
+    use minecraft_modpack_updater::version::check_components_roots;
     let fixture = TempDir::new().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
@@ -481,7 +483,7 @@ fn descriptor_change_after_validation_invalidates_plan() {
 
 #[test]
 fn oversized_file_fails_before_allocation() {
-    use jsipack_updater::safe_fs::SafeRoot;
+    use minecraft_modpack_updater::safe_fs::SafeRoot;
     let fixture = TempDir::new().unwrap();
     let path = fixture.path().join("large.bin");
     fs::File::create(&path)
@@ -521,7 +523,7 @@ fn oversized_snapshot_fails_before_hashing() {
 #[cfg(unix)]
 #[test]
 fn metadata_symlink_is_rejected_before_reading() {
-    use jsipack_updater::version::check_components;
+    use minecraft_modpack_updater::version::check_components;
     use std::os::unix::fs::symlink;
     let fixture = TempDir::new().unwrap();
     let base = fixture.path().join("base");
@@ -554,7 +556,7 @@ fn metadata_symlink_is_rejected_before_reading() {
 #[cfg(unix)]
 #[test]
 fn symlinked_root_is_rejected_with_trailing_components() {
-    use jsipack_updater::safe_fs::SafeRoot;
+    use minecraft_modpack_updater::safe_fs::SafeRoot;
     use std::os::unix::fs::symlink;
     let fixture = TempDir::new().unwrap();
     let target = fixture.path().join("target");
@@ -572,7 +574,7 @@ fn symlinked_root_is_rejected_with_trailing_components() {
 #[cfg(unix)]
 #[test]
 fn pinned_root_reads_original_directory_after_rename() {
-    use jsipack_updater::safe_fs::SafeRoot;
+    use minecraft_modpack_updater::safe_fs::SafeRoot;
     let fixture = TempDir::new().unwrap();
     let root = fixture.path().join("root");
     write(&root, "value.txt", "old");

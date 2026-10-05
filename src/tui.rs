@@ -4,8 +4,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use jsipack_updater::transaction;
-use jsipack_updater::updater::{ConflictResolution, UnresolvedConflicts};
+use minecraft_modpack_updater::transaction;
+use minecraft_modpack_updater::updater::{ConflictResolution, UnresolvedConflicts};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -184,7 +184,7 @@ pub fn run(mut args: RemoteArgs) -> Result<()> {
                     ])
                     .split(frame.area());
                 frame.render_widget(
-                    Paragraph::new("JSIPackUpdater · Minecraft 整合包更新")
+                    Paragraph::new("Minecraft Modpack Updater · Minecraft 整合包更新")
                         .block(Block::default().borders(Borders::ALL)),
                     areas[0],
                 );

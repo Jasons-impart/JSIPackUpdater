@@ -1674,7 +1674,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "jsipack-updater"
+name = "minecraft-modpack-updater"
 version = "0.1.0"
 dependencies = [
  "anyhow",

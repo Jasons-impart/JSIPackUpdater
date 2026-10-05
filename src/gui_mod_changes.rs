@@ -1,5 +1,5 @@
 use eframe::egui;
-use jsipack_updater::managed::{ModChange, ModChangeKind, ModFile};
+use minecraft_modpack_updater::managed::{ModChange, ModChangeKind, ModFile};
 
 fn file_label(file: &ModFile) -> String {
     let selection = if file.optional {

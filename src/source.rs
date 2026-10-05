@@ -756,7 +756,7 @@ impl GitHub {
         let mut response = self
             .client
             .get(url)
-            .header(USER_AGENT, "JSIPackUpdater/0.1")
+            .header(USER_AGENT, "minecraft-modpack-updater/0.1")
             .timeout(fetch.remaining()?)
             .send()
             .with_context(|| format!("fetching Git blob for {path}"))?;
@@ -803,7 +803,10 @@ impl GitHub {
 
     fn send(&self, url: reqwest::Url, fetch: &FetchBudget) -> Result<Response> {
         let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static("JSIPackUpdater/0.1"));
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_static("minecraft-modpack-updater/0.1"),
+        );
         headers.insert(
             ACCEPT,
             HeaderValue::from_static("application/vnd.github+json"),

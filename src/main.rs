@@ -1,13 +1,13 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use jsipack_updater::bkmpw;
-use jsipack_updater::managed::{Side, adopt_installed};
-use jsipack_updater::planner::{Action, Plan, plan_roots_checked};
-use jsipack_updater::safe_fs::SafeRoot;
-use jsipack_updater::source::{GitHub, SourceLimits};
-use jsipack_updater::transaction;
-use jsipack_updater::updater::{self, ConflictPolicy, ConflictResolution};
-use jsipack_updater::version::{check_components_roots, load_release_info};
+use minecraft_modpack_updater::bkmpw;
+use minecraft_modpack_updater::managed::{Side, adopt_installed};
+use minecraft_modpack_updater::planner::{Action, Plan, plan_roots_checked};
+use minecraft_modpack_updater::safe_fs::SafeRoot;
+use minecraft_modpack_updater::source::{GitHub, SourceLimits};
+use minecraft_modpack_updater::transaction;
+use minecraft_modpack_updater::updater::{self, ConflictPolicy, ConflictResolution};
+use minecraft_modpack_updater::version::{check_components_roots, load_release_info};
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::PathBuf;
@@ -20,8 +20,8 @@ mod tui;
 
 #[derive(Parser)]
 #[command(
-    name = "jsipack-updater",
-    about = "Update an installed JSIPack client or server instance"
+    name = "minecraft-modpack-updater",
+    about = "Update an installed Minecraft modpack client or server instance"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -401,7 +401,7 @@ struct PreviewSummary {
     target_commit: String,
     item_count: usize,
     conflicts: Vec<String>,
-    mods: Vec<jsipack_updater::managed::ModChange>,
+    mods: Vec<minecraft_modpack_updater::managed::ModChange>,
 }
 
 fn run_remote_update(
@@ -463,7 +463,7 @@ fn run_remote_preview(args: &RemoteArgs) -> Result<PreviewSummary> {
     }
     let plan = plan_roots_checked(&base_root, &target_root, &instance_root, &check)?;
     Ok(PreviewSummary {
-        mods: jsipack_updater::managed::mod_changes(&base_root, &target_root, args.side)?,
+        mods: minecraft_modpack_updater::managed::mod_changes(&base_root, &target_root, args.side)?,
         base_commit: base.commit_id,
         target_commit: destination.commit_id,
         item_count: plan.items.len(),

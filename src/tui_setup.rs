@@ -1,8 +1,8 @@
 use super::{RemoteArgs, Screen};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use jsipack_updater::managed::Side;
-use jsipack_updater::source::GitHub;
+use minecraft_modpack_updater::managed::Side;
+use minecraft_modpack_updater::source::GitHub;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
@@ -133,7 +133,7 @@ pub(super) fn configure(screen: &mut Screen, args: &mut RemoteArgs) -> Result<bo
                 ])
                 .split(frame.area());
             frame.render_widget(
-                Paragraph::new("JSIPackUpdater · 选择实例和版本")
+                Paragraph::new("Minecraft Modpack Updater · 选择实例和版本")
                     .block(Block::default().borders(Borders::ALL)),
                 areas[0],
             );

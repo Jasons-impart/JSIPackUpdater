@@ -1,9 +1,9 @@
 use super::{GuiApp, Message};
 use eframe::egui::{self, Event, PointerButton};
-use jsipack_updater::managed::Side;
-use jsipack_updater::managed::{ModChange, ModChangeKind, ModFile};
-use jsipack_updater::updater::ConflictResolution;
-use jsipack_updater::version::ReleaseInfo;
+use minecraft_modpack_updater::managed::Side;
+use minecraft_modpack_updater::managed::{ModChange, ModChangeKind, ModFile};
+use minecraft_modpack_updater::updater::ConflictResolution;
+use minecraft_modpack_updater::version::ReleaseInfo;
 
 fn app() -> GuiApp {
     GuiApp {

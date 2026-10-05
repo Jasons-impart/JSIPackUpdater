@@ -1,26 +1,26 @@
-# JSIPackUpdater
+# Minecraft Modpack Updater
 
 Minecraft 整合包更新器。CLI、TUI 和可选的 egui GUI 共用 Rust 更新核心；支持客户端和服务端。它从安装版本的 commit 更新到指定 tag/commit，同步 Git 跟踪文件及 `bkmpw` 管理的模组、资源包和光影。Minecraft 或 NeoForge 版本变化时会停止更新并提示新建实例。
 
 ## 使用
 
-先停止游戏或服务端，并备份整个实例。下载与操作系统相符的更新器压缩包，把其中的 `jsipack-updater` 和 `bkmpw` 放在同一目录。实例须含 `config/createdelight_release_info.json`。
+先停止游戏或服务端，并备份整个实例。下载与操作系统相符的更新器压缩包，把其中的 `minecraft-modpack-updater` 和 `bkmpw` 放在同一目录。实例须含 `config/createdelight_release_info.json`。
 
 ```bash
 # 预览（不会写入实例）
-jsipack-updater preview-remote --instance /path/to/minecraft --target v2.0.0.0-test2
+minecraft-modpack-updater preview-remote --instance /path/to/minecraft --target v2.0.0.0-test2
 
 # 更新客户端；服务端改用 --side server
-jsipack-updater update-remote --instance /path/to/minecraft --side client --target v2.0.0.0-test2
+minecraft-modpack-updater update-remote --instance /path/to/minecraft --side client --target v2.0.0.0-test2
 
 # 终端界面：选择检测到的实例与最近发布版本；Tab 补全路径，F2 浏览目录
 # 侧别默认客户端；也可继续通过参数预填
-jsipack-updater tui
+minecraft-modpack-updater tui
 # GUI（需启用 gui 功能构建）：选实例、选发布版本、点更新
-jsipack-updater gui
+minecraft-modpack-updater gui
 
 # 应用阶段中断后，从已校验的备份回退
-jsipack-updater rollback --instance /path/to/minecraft
+minecraft-modpack-updater rollback --instance /path/to/minecraft
 ```
 
 带 GUI 的构建不传参数时直接打开窗口，也可使用 `gui` 子命令。GUI 会列出检测到的实例，或用系统文件夹选择框选取；选择启动器实例外层目录时，会识别其中的 `minecraft` / `.minecraft`。识别后显示当前整合包、Minecraft 和 NeoForge 版本，并自动读取保存的实例类型（首次根据服务端文件推荐，可自行调整）。发布版本在后台加载，可直接从下拉列表选择。仓库、令牌、工具路径和手动指定 commit 收在高级设置中。

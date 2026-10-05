@@ -1,8 +1,8 @@
 [package]
-name = "jsipack-updater"
+name = "minecraft-modpack-updater"
 version = "0.1.0"
 edition = "2024"
-description = "Shared update planner and CLI for JSIPack"
+description = "Shared update planner and CLI for Minecraft modpacks"
 
 [features]
 default = []

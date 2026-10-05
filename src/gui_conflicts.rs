@@ -1,5 +1,5 @@
 use eframe::egui;
-use jsipack_updater::updater::ConflictResolution;
+use minecraft_modpack_updater::updater::ConflictResolution;
 use std::collections::BTreeMap;
 
 #[derive(Default)]
@@ -105,7 +105,7 @@ impl ConflictPanel {
 #[cfg(test)]
 mod tests {
     use super::ConflictPanel;
-    use jsipack_updater::updater::ConflictResolution;
+    use minecraft_modpack_updater::updater::ConflictResolution;
 
     #[test]
     fn batch_choice_only_resolves_conflicts_already_shown() {
