@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 mod locking;
 mod process;
+pub mod progress;
 pub use locking::{ToolLock, tool_lock};
+pub use progress::Progress;
 mod releases;
 mod state;
 pub use releases::{ToolRelease, latest};
