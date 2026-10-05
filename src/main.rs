@@ -1,10 +1,10 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use minecraft_modpack_updater::bkmpw;
 use minecraft_modpack_updater::managed::{Side, adopt_installed};
 use minecraft_modpack_updater::planner::{Action, Plan, plan_roots_checked};
 use minecraft_modpack_updater::safe_fs::SafeRoot;
 use minecraft_modpack_updater::source::{GitHub, SourceLimits};
+use minecraft_modpack_updater::tools;
 use minecraft_modpack_updater::transaction;
 use minecraft_modpack_updater::updater::{self, ConflictPolicy, ConflictResolution};
 use minecraft_modpack_updater::version::{check_components_roots, load_release_info};
@@ -16,6 +16,7 @@ use std::process::ExitCode;
 #[cfg(feature = "gui")]
 mod gui;
 mod instance_paths;
+mod tool_cli;
 mod tui;
 
 #[derive(Parser)]
@@ -31,6 +32,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage bkmpw and updater installations and versions.
+    Tools {
+        #[command(subcommand)]
+        action: tool_cli::ToolCommand,
+    },
     #[command(hide = true)]
     SelfUpdateHelper { instance: PathBuf, request: String },
     /// Show update progress in a terminal window.
@@ -65,6 +71,8 @@ enum Command {
         side: Side,
         #[arg(long)]
         bkmpw: Option<PathBuf>,
+        #[arg(long, value_enum)]
+        install_bkmpw: Option<tools::InstallChoice>,
         #[arg(long, default_value = "Jasons-impart/Create-Delight-Project-Rebirth")]
         repo: String,
         #[arg(long)]
@@ -90,6 +98,8 @@ enum Command {
         side: Side,
         #[arg(long)]
         bkmpw: Option<PathBuf>,
+        #[arg(long, value_enum)]
+        install_bkmpw: Option<tools::InstallChoice>,
         #[arg(long, value_enum, default_value = "stop")]
         conflicts: ConflictChoice,
         #[arg(long = "resolve", value_name = "PATH=target|local|manual:FILE")]
@@ -201,6 +211,7 @@ fn main() -> Result<ExitCode> {
     }
     let Cli { command } = Cli::parse();
     match command {
+        Command::Tools { action } => tool_cli::run(action)?,
         Command::SelfUpdateHelper { instance, request } => {
             minecraft_modpack_updater::tools::finish_self_update(&instance, &request)?
         }
@@ -228,6 +239,7 @@ fn main() -> Result<ExitCode> {
         #[cfg(feature = "gui")]
         Command::Gui => gui::run()?,
         Command::Rollback { instance } => {
+            let _guard = tools::tool_lock(tools::Tool::Updater, false)?;
             transaction::rollback(&instance)?;
             println!("interrupted update rolled back");
         }
@@ -239,6 +251,7 @@ fn main() -> Result<ExitCode> {
             instance,
             side,
             bkmpw,
+            install_bkmpw,
             conflicts,
             resolve,
         } => {
@@ -246,6 +259,7 @@ fn main() -> Result<ExitCode> {
             if !base_commit.eq_ignore_ascii_case(&installed.commit_id) {
                 bail!("base snapshot commit does not match installed release marker");
             }
+            tool_cli::ensure(&instance, &bkmpw, install_bkmpw)?;
             let _tool_guard = minecraft_modpack_updater::tools::tool_lock(
                 minecraft_modpack_updater::tools::Tool::Bkmpw,
                 false,
@@ -254,7 +268,7 @@ fn main() -> Result<ExitCode> {
                 minecraft_modpack_updater::tools::Tool::Updater,
                 false,
             )?;
-            let executable = bkmpw_path(bkmpw)?;
+            let executable = bkmpw_path(bkmpw, &instance)?;
             let report = updater::update(updater::UpdateRequest {
                 base_path: &base_tree,
                 target_path: &target_tree,
@@ -273,11 +287,13 @@ fn main() -> Result<ExitCode> {
             target,
             side,
             bkmpw,
+            install_bkmpw,
             repo,
             token_stdin,
             conflicts,
             resolve,
         } => {
+            tool_cli::ensure(&instance, &bkmpw, install_bkmpw)?;
             let report = run_remote_update(
                 RemoteArgs {
                     instance,
@@ -289,7 +305,7 @@ fn main() -> Result<ExitCode> {
                     conflicts,
                     resolutions: parse_resolutions(&resolve)?,
                 },
-                |_| {},
+                |message| eprintln!("{message}"),
             )?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
@@ -437,7 +453,7 @@ fn run_remote_update(
         minecraft_modpack_updater::tools::Tool::Updater,
         false,
     )?;
-    let executable = bkmpw_path(args.bkmpw)?;
+    let executable = bkmpw_path(args.bkmpw, &args.instance)?;
     instance_root.ensure_dir(".jsipack-updater/cache")?;
     let cache = args.instance.join(".jsipack-updater/cache");
     let github = GitHub::new(&args.repo, args.token)?;
@@ -500,15 +516,17 @@ fn run_remote_preview(args: &RemoteArgs) -> Result<PreviewSummary> {
     })
 }
 
-fn bkmpw_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
+fn bkmpw_path(explicit: Option<PathBuf>, instance: &std::path::Path) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path);
     }
-    let executable = std::env::current_exe()?;
-    let name = if cfg!(windows) { "bkmpw.exe" } else { "bkmpw" };
-    let path = executable.with_file_name(name);
-    bkmpw::verify_pinned_binary(&path)?;
-    Ok(path)
+    tools::discover(instance)?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "bkmpw is missing; choose instance download or npm installation in tool management"
+            )
+        })?
+        .executable_path(instance)
 }
 
 fn read_token(from_stdin: bool) -> Result<Option<String>> {

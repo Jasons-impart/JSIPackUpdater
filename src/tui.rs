@@ -25,6 +25,14 @@ enum Message {
 
 #[path = "tui_setup.rs"]
 mod setup;
+#[path = "tui_tools.rs"]
+mod tools;
+
+pub fn manage_tools(instance: PathBuf) -> Result<()> {
+    let mut screen = Screen::open()?;
+    tools::run(&mut screen, instance, true)?;
+    Ok(())
+}
 
 fn spawn_update(args: RemoteArgs) -> (Receiver<Message>, JoinHandle<()>) {
     let (sender, receiver) = mpsc::channel();
@@ -60,6 +68,7 @@ fn spawn_update(args: RemoteArgs) -> (Receiver<Message>, JoinHandle<()>) {
 
 struct Screen {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    active: bool,
 }
 
 impl Screen {
@@ -77,14 +86,26 @@ impl Screen {
                 return Err(error.into());
             }
         };
-        Ok(Self { terminal })
+        Ok(Self {
+            terminal,
+            active: true,
+        })
     }
 }
 
+impl Screen {
+    fn restore(&mut self) {
+        if self.active {
+            let _ = disable_raw_mode();
+            let _ =
+                crossterm::execute!(io::stdout(), LeaveAlternateScreen, crossterm::cursor::Show);
+            self.active = false;
+        }
+    }
+}
 impl Drop for Screen {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = crossterm::execute!(io::stdout(), LeaveAlternateScreen);
+        self.restore();
     }
 }
 
@@ -109,6 +130,10 @@ pub fn run(mut args: RemoteArgs) -> Result<()> {
             {
                 match key.code {
                     KeyCode::Char('r') => {
+                        let _guard = minecraft_modpack_updater::tools::tool_lock(
+                            minecraft_modpack_updater::tools::Tool::Updater,
+                            false,
+                        )?;
                         transaction::rollback(&args.instance)?;
                         break;
                     }
@@ -117,6 +142,9 @@ pub fn run(mut args: RemoteArgs) -> Result<()> {
                 }
             }
         }
+    }
+    if !tools::ensure(&mut screen, &args)? {
+        return Ok(());
     }
     let (mut receiver, initial_worker) = spawn_update(args.clone());
     let mut worker = Some(initial_worker);
