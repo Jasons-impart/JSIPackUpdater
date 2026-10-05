@@ -129,7 +129,11 @@ pub(super) fn discover_unlocked(instance: &Path) -> Result<Option<Installation>>
         return Ok(Some(installed));
     }
     if let Some(path) = process::find_program("bkmpw")
-        && path.extension().is_none_or(|e| e != "cmd" && e != "js")
+        && path.extension().and_then(|e| e.to_str()).is_none_or(|e| {
+            !["cmd", "bat", "js"]
+                .iter()
+                .any(|suffix| e.eq_ignore_ascii_case(suffix))
+        })
         && let Some(installed) = candidate(path, Ownership::External)
     {
         return Ok(Some(installed));

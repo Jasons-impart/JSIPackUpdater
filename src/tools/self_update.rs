@@ -22,6 +22,13 @@ struct Prepared {
 static PREPARED: std::sync::OnceLock<std::sync::Mutex<Option<Prepared>>> =
     std::sync::OnceLock::new();
 
+fn cached_updater(old: &Installation) -> Result<bool> {
+    Ok(old.ownership == Ownership::Local
+        || old
+            .path
+            .ends_with(state::cache_path(Tool::Updater, &old.version)?))
+}
+
 /// Call after the old UI has restored its terminal and closed its window.
 pub fn launch_prepared_update() -> Result<()> {
     let Some(mut prepared) = PREPARED
@@ -188,7 +195,7 @@ pub fn finish_self_update(instance: &Path, request_path: &str) -> Result<()> {
         }
         let destination = SafeRoot::open(target.parent().context("updater has no parent")?)?;
         let target_name = filename(&target)?;
-        if request.old.ownership != Ownership::Local
+        if !cached_updater(&request.old)?
             && !destination.copy_regular_to(target_name, &root, &backup)?
         {
             bail!("cannot back up old updater");
@@ -201,7 +208,7 @@ pub fn finish_self_update(instance: &Path, request_path: &str) -> Result<()> {
                 &npm_native_path(Tool::Updater)?,
                 &request.release,
             )?;
-        } else if request.old.ownership != Ownership::Local {
+        } else if !cached_updater(&request.old)? {
             let source = SafeRoot::open(new_path.parent().context("new updater has no parent")?)?;
             if !source.copy_regular_to_checked(
                 filename(&new_path)?,
@@ -219,13 +226,16 @@ pub fn finish_self_update(instance: &Path, request_path: &str) -> Result<()> {
             }
             acquire::verified(Tool::Updater, &target, &request.release)?;
         }
-        let executable = match request.old.ownership {
-            Ownership::Npm => npm_native_path(Tool::Updater)?,
-            Ownership::Local => new_path.clone(),
-            _ => target.clone(),
+        let executable = if cached_updater(&request.old)? {
+            new_path.clone()
+        } else {
+            match request.old.ownership {
+                Ownership::Npm => npm_native_path(Tool::Updater)?,
+                _ => target.clone(),
+            }
         };
         let mut restarted = request.new.clone();
-        if request.old.ownership != Ownership::Local {
+        if !cached_updater(&request.old)? {
             restarted.path = executable.clone();
             restarted.ownership = request.old.ownership;
         }
@@ -235,7 +245,10 @@ pub fn finish_self_update(instance: &Path, request_path: &str) -> Result<()> {
     drop(guard); // Release mutation locks before the new program does any work.
     let outcome = outcome.and_then(|executable| {
         let mut command = Command::new(executable);
-        command.args(&request.args).env("MMPU_RESTARTED", "1");
+        command
+            .args(&request.args)
+            .env("MMPU_RESTARTED", "1")
+            .env_remove("MMPU_SELF_UPDATE_ERROR");
         terminal_console(&mut command, request.terminal);
         let mut child = command.spawn()?;
         std::thread::sleep(Duration::from_secs(2));
@@ -396,6 +409,19 @@ fn npm_version(version: &str) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn version_cache_from_another_instance_is_immutable() {
+        let mut old = Installation {
+            tool: Tool::Updater,
+            version: "0.1.0".into(),
+            ownership: Ownership::Portable,
+            path: Path::new("/instance-a").join(state::cache_path(Tool::Updater, "0.1.0").unwrap()),
+            sha256: String::new(),
+        };
+        assert!(cached_updater(&old).unwrap());
+        old.path = "/instance-a/updater".into();
+        assert!(!cached_updater(&old).unwrap());
+    }
+    #[test]
     fn terminal_wait_preserves_failure_and_outlives_failed_bookkeeping() {
         for bad_marker in [false, true] {
             let temp = tempfile::NamedTempFile::new().unwrap();
@@ -415,12 +441,20 @@ mod tests {
     }
     #[test]
     fn portable_replacement_preserves_backup_and_rolls_back_startup_failure() {
-        for fail in [false, true] {
+        for (fail, cached) in [(false, false), (true, false), (false, true)] {
             let temp = tempfile::TempDir::new().unwrap();
             let instance = temp.path().canonicalize().unwrap();
             let root = SafeRoot::open(&instance).unwrap();
             let original = std::env::current_exe().unwrap().canonicalize().unwrap();
-            let target = instance.join("updater");
+            let target = if cached {
+                let origin = instance.join("other-instance");
+                let path = origin
+                    .join(state::cache_path(Tool::Updater, env!("CARGO_PKG_VERSION")).unwrap());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                path
+            } else {
+                instance.join("updater")
+            };
             std::fs::copy(&original, &target).unwrap();
             let old = Installation {
                 tool: Tool::Updater,
@@ -496,12 +530,18 @@ mod tests {
             assert_eq!(result.is_err(), fail);
             assert_eq!(
                 state::hash(&target).unwrap(),
-                if fail { old.sha256.clone() } else { sha256 }
+                if fail || cached {
+                    old.sha256.clone()
+                } else {
+                    sha256
+                }
             );
-            assert_eq!(
-                state::hash(&instance.join(format!("{request}.old"))).unwrap(),
-                old.sha256
-            );
+            if !cached {
+                assert_eq!(
+                    state::hash(&instance.join(format!("{request}.old"))).unwrap(),
+                    old.sha256
+                );
+            }
             if fail {
                 assert!(
                     !root

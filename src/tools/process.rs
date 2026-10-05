@@ -239,6 +239,7 @@ impl OutputStream {
 fn windows_npm(npm: &std::path::Path, node: Option<PathBuf>) -> Result<Command> {
     if npm
         .extension()
+        .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
     {
         return Ok(Command::new(npm));
