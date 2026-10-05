@@ -458,9 +458,12 @@ fn run_remote_update(
     let cache = args.instance.join(".jsipack-updater/cache");
     let github = GitHub::new(&args.repo, args.token)?;
     progress("Fetching installed commit".into());
-    let base = github.fetch_snapshot_cached(&installed.commit_id, &cache)?;
+    let base = github.fetch_snapshot_cached_with_progress(&installed.commit_id, &cache, |p| {
+        progress(p.to_string())
+    })?;
     progress("Fetching target commit".into());
-    let destination = github.fetch_snapshot_cached(&args.target, &cache)?;
+    let destination = github
+        .fetch_snapshot_cached_with_progress(&args.target, &cache, |p| progress(p.to_string()))?;
     updater::update_with_progress(
         updater::UpdateRequest {
             base_path: base.root.path(),

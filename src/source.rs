@@ -293,6 +293,15 @@ impl GitHub {
     /// Reuse a persisted snapshot only after checking every cached file against
     /// the authoritative Git tree for the resolved full commit SHA.
     pub fn fetch_snapshot_cached(&self, reference: &str, cache_path: &Path) -> Result<Snapshot> {
+        self.fetch_snapshot_cached_with_progress(reference, cache_path, |_| {})
+    }
+
+    pub fn fetch_snapshot_cached_with_progress(
+        &self,
+        reference: &str,
+        cache_path: &Path,
+        mut progress: impl FnMut(crate::tools::Progress),
+    ) -> Result<Snapshot> {
         if reference.is_empty() || reference.chars().any(char::is_control) {
             bail!("invalid target reference");
         }
@@ -336,6 +345,7 @@ impl GitHub {
                     .set_unix_mode(path, if entry.mode == "100755" { 0o755 } else { 0o644 })?;
             }
             if valid {
+                progress(crate::tools::Progress::Stage("复用已验证的源码缓存".into()));
                 return Ok(Snapshot {
                     commit_id: commit.sha,
                     root: output,
@@ -343,7 +353,7 @@ impl GitHub {
                 });
             }
         }
-        let snapshot = self.fetch_snapshot(&commit.sha)?;
+        let snapshot = self.fetch_snapshot_with_progress(&commit.sha, &mut progress)?;
         if cache_root.ensure_dir(&commit.sha).is_ok()
             && let Ok(cached) = SafeRoot::open(&cached_path)
             && let Ok(paths) = cached.file_paths()
@@ -431,6 +441,14 @@ impl GitHub {
     }
 
     pub fn fetch_snapshot(&self, reference: &str) -> Result<Snapshot> {
+        self.fetch_snapshot_with_progress(reference, |_| {})
+    }
+
+    pub fn fetch_snapshot_with_progress(
+        &self,
+        reference: &str,
+        mut progress: impl FnMut(crate::tools::Progress),
+    ) -> Result<Snapshot> {
         if reference.is_empty() || reference.chars().any(char::is_control) {
             bail!("invalid target reference");
         }
@@ -453,7 +471,13 @@ impl GitHub {
                 "insufficient temporary disk space: need {required_space} bytes, available {available}"
             );
         }
-        self.download_archive(&commit.sha, &files, root.path(), &mut budget)?;
+        self.download_archive_progress(
+            &commit.sha,
+            &files,
+            root.path(),
+            &mut budget,
+            &mut progress,
+        )?;
         budget.check()?;
         Ok(Snapshot {
             commit_id: commit.sha,
@@ -557,6 +581,7 @@ impl GitHub {
         Ok(())
     }
 
+    #[cfg(test)]
     fn download_archive(
         &self,
         commit: &str,
@@ -564,9 +589,22 @@ impl GitHub {
         destination: &Path,
         fetch: &mut FetchBudget,
     ) -> Result<()> {
+        self.download_archive_progress(commit, files, destination, fetch, &mut |_| {})
+    }
+
+    fn download_archive_progress(
+        &self,
+        commit: &str,
+        files: &BTreeMap<String, TreeEntry>,
+        destination: &Path,
+        fetch: &mut FetchBudget,
+        progress: &mut impl FnMut(crate::tools::Progress),
+    ) -> Result<()> {
         fetch.check()?;
         let url = self.api_url(&["repos", &self.owner, &self.repo, "tarball", commit], &[])?;
         let response = self.send(url, fetch)?;
+        let total = response.content_length();
+        let response = crate::tools::progress::ProgressReader::new(response, total, &mut *progress);
         let archive_limit = archive_stream_limit(
             self.limits.max_snapshot_bytes,
             files.keys().map(String::as_str),
@@ -681,6 +719,9 @@ impl GitHub {
         if seen.len() != files.len() || !pending_blobs.is_empty() {
             for (path, expected) in files {
                 if !seen.contains(path) || pending_blobs.contains(path) {
+                    progress(crate::tools::Progress::Stage(format!(
+                        "获取源码文件：{path}"
+                    )));
                     let bytes = self.fetch_raw_blob(commit, path, expected, fetch)?;
                     written = written
                         .checked_add(bytes.len() as u64)
@@ -1194,9 +1235,21 @@ mod tests {
         ]);
         let github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
         let output = TempDir::new().unwrap();
+        let mut progress = Vec::new();
         github
-            .download_archive(&commit, &files, output.path(), &mut FetchBudget::new())
+            .download_archive_progress(
+                &commit,
+                &files,
+                output.path(),
+                &mut FetchBudget::new(),
+                &mut |p| progress.push(p),
+            )
             .unwrap();
+        assert!(
+            progress
+                .iter()
+                .any(|p| matches!(p, crate::tools::Progress::Download { bytes, .. } if *bytes > 0))
+        );
         assert_eq!(
             fs::read(output.path().join("devtool.bat")).unwrap(),
             original
