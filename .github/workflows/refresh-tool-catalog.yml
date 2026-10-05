@@ -1,0 +1,121 @@
+name: Refresh recommended bkmpw
+
+on:
+  workflow_dispatch:
+    inputs:
+      bkmpw_tag:
+        description: Official stable bkmpw tag to test (for example v0.2.5)
+        required: true
+      updater_tag:
+        description: Existing updater release whose catalog will be updated
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-tool-catalog-${{ inputs.updater_tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: ''
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: .exe
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            suffix: ''
+          - os: macos-15
+            target: aarch64-apple-darwin
+            suffix: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.updater_tag }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+      - name: Validate inputs and tested updater version
+        shell: bash
+        env:
+          BKMPW_TAG: ${{ inputs.bkmpw_tag }}
+          UPDATER_TAG: ${{ inputs.updater_tag }}
+        run: |
+          python - <<'PY'
+          import os, re, pathlib, tomllib
+          for key in ('BKMPW_TAG', 'UPDATER_TAG'):
+              assert re.fullmatch(r'v\d+\.\d+\.\d+', os.environ[key]), 'stable tag required'
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version']
+          assert os.environ['UPDATER_TAG'] == 'v' + version, 'run from the requested updater source version'
+          PY
+      - name: Download official bkmpw and validate checksum and protocol
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BKMPW_TAG: ${{ inputs.bkmpw_tag }}
+          TARGET: ${{ matrix.target }}
+          SUFFIX: ${{ matrix.suffix }}
+        run: |
+          mkdir -p compatibility
+          asset="bkmpw-$BKMPW_TAG-$TARGET$SUFFIX"
+          gh release download "$BKMPW_TAG" --repo bro-know-my-org/BroKnowMyPackwiz --pattern "$asset" --pattern "$asset.sha256" --dir compatibility
+          chmod +x "compatibility/$asset"
+          expected=$(python -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_text().split()[0])' "compatibility/$asset.sha256")
+          python scripts/tool-catalog.py verify-bkmpw --binary "compatibility/$asset" --sha256 "$expected" --version "${BKMPW_TAG#v}" --target "$TARGET" --output "bkmpw-$TARGET.json"
+          python -c 'import pathlib,sys; print("MMPU_TEST_BKMPW=" + str(pathlib.Path(sys.argv[1]).resolve()))' "compatibility/$asset" >> "$GITHUB_ENV"
+      - name: Test updater compatibility
+        run: cargo test --locked --all-features --test bkmpw_compatibility
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tested-bkmpw-${{ matrix.target }}
+          path: bkmpw-${{ matrix.target }}.json
+          if-no-files-found: error
+          overwrite: true
+
+  refresh:
+    needs: verify
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.updater_tag }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tested-bkmpw-*
+          merge-multiple: true
+          path: tested
+      - name: Replace catalog after all platforms pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPDATER_TAG: ${{ inputs.updater_tag }}
+        run: |
+          if ! gh release download "$UPDATER_TAG" --repo "$GITHUB_REPOSITORY" --pattern tool-releases.json --dir current; then
+            gh release download "$UPDATER_TAG" --repo "$GITHUB_REPOSITORY" --pattern tool-releases.previous.json --dir recovery
+            mkdir -p current
+            cp recovery/tool-releases.previous.json current/tool-releases.json
+            gh release upload "$UPDATER_TAG" current/tool-releases.json --repo "$GITHUB_REPOSITORY"
+          fi
+          python scripts/tool-catalog.py refresh --assets tested --existing current/tool-releases.json --output tested/tool-releases.json
+          cp current/tool-releases.json current/tool-releases.previous.json
+          gh release upload "$UPDATER_TAG" current/tool-releases.previous.json --repo "$GITHUB_REPOSITORY" --clobber
+          if ! gh release upload "$UPDATER_TAG" tested/tool-releases.json --repo "$GITHUB_REPOSITORY" --clobber; then
+            gh release upload "$UPDATER_TAG" current/tool-releases.json --repo "$GITHUB_REPOSITORY" --clobber || true
+            echo 'Catalog refresh failed; the verified previous catalog remains available for recovery.' >&2
+            exit 1
+          fi
