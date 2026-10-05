@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 mod process;
+mod releases;
+mod state;
+pub use releases::{ToolRelease, latest};
+pub use state::{current_updater, discover, save};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]

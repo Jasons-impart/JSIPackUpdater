@@ -72,10 +72,28 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           python -c 'import os,pathlib,zipfile; p=pathlib.Path("dist"); out=pathlib.Path("minecraft-modpack-updater-"+os.environ["TARGET"]+".zip"); z=zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED); [z.write(f,f.name) for f in p.iterdir()]; z.close()'
+      - name: Prepare native self-update assets
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          SUFFIX: ${{ matrix.suffix }}
+        run: |
+          python - <<'PY'
+          import hashlib, os, pathlib, shutil, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version']
+          if os.environ['GITHUB_REF'].startswith('refs/tags/'):
+              assert os.environ['GITHUB_REF_NAME'] == 'v' + version, 'tag must match Cargo version'
+          name = f'minecraft-modpack-updater-v{version}-{os.environ["TARGET"]}{os.environ["SUFFIX"]}'
+          path = pathlib.Path(name)
+          shutil.copyfile('dist/minecraft-modpack-updater' + os.environ['SUFFIX'], path)
+          path.with_name(name + '.sha256').write_text(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + name + '\n')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: minecraft-modpack-updater-${{ matrix.target }}
-          path: minecraft-modpack-updater-${{ matrix.target }}.zip
+          path: |
+            minecraft-modpack-updater-${{ matrix.target }}.zip
+            minecraft-modpack-updater-v*-${{ matrix.target }}*
           if-no-files-found: error
 
   publish:
@@ -94,4 +112,4 @@ jobs:
       - name: Publish archives
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes
