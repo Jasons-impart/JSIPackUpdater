@@ -68,13 +68,23 @@ pub(super) fn capture(command: Command) -> Result<Vec<u8>> {
     capture_with_timeout(command, Duration::from_secs(15))
 }
 
-fn capture_with_timeout(mut command: Command, timeout: Duration) -> Result<Vec<u8>> {
-    let mut output = tempfile::tempfile()?;
-    let mut errors = tempfile::tempfile()?;
+fn capture_with_timeout(command: Command, timeout: Duration) -> Result<Vec<u8>> {
+    capture_progress(command, timeout, &mut |_| {})
+}
+
+fn capture_progress(
+    mut command: Command,
+    timeout: Duration,
+    progress: &mut impl FnMut(String),
+) -> Result<Vec<u8>> {
+    let stdout_file = tempfile::NamedTempFile::new()?;
+    let stderr_file = tempfile::NamedTempFile::new()?;
+    let mut output = stdout_file.reopen()?;
+    let mut errors = stderr_file.reopen()?;
     command
         .stdin(Stdio::null())
-        .stdout(output.try_clone()?)
-        .stderr(errors.try_clone()?);
+        .stdout(stdout_file.reopen()?)
+        .stderr(stderr_file.reopen()?);
     #[cfg(unix)]
     let child = {
         use std::os::unix::process::CommandExt;
@@ -90,12 +100,16 @@ fn capture_with_timeout(mut command: Command, timeout: Duration) -> Result<Vec<u
     let mut guard = Running(Some(child));
     let child = guard.0.as_mut().unwrap();
     let deadline = Instant::now() + timeout;
+    let mut streams = [OutputStream::default(), OutputStream::default()];
     let status = loop {
         if Instant::now() >= deadline
             || output.metadata()?.len() > 4 * 1024 * 1024
             || errors.metadata()?.len() > 4 * 1024 * 1024
         {
             bail!("tool command exceeded its time or output limit");
+        }
+        for (file, stream) in [&mut output, &mut errors].into_iter().zip(&mut streams) {
+            stream.drain(file, false, progress)?;
         }
         #[cfg(unix)]
         {
@@ -133,6 +147,9 @@ fn capture_with_timeout(mut command: Command, timeout: Duration) -> Result<Vec<u
         std::thread::sleep(Duration::from_millis(50));
     };
     guard.0.take();
+    for (file, stream) in [&mut output, &mut errors].into_iter().zip(&mut streams) {
+        stream.drain(file, true, progress)?;
+    }
     if errors.metadata()?.len() > 4 * 1024 * 1024 {
         bail!("tool stderr exceeded its size limit");
     }
@@ -152,6 +169,10 @@ fn capture_with_timeout(mut command: Command, timeout: Duration) -> Result<Vec<u
 }
 
 pub(super) fn npm(args: &[&str]) -> Result<Vec<u8>> {
+    npm_progress(args, &mut |_| {})
+}
+
+pub(super) fn npm_progress(args: &[&str], progress: &mut impl FnMut(String)) -> Result<Vec<u8>> {
     let npm = find_program("npm").context("npm is not available")?;
     #[cfg(not(windows))]
     let mut command = Command::new(npm);
@@ -159,11 +180,59 @@ pub(super) fn npm(args: &[&str]) -> Result<Vec<u8>> {
     let mut command = windows_npm(&npm, find_program("node"))?;
     command.args(args);
     let timeout = if args.first() == Some(&"install") {
-        180
+        600
     } else {
         15
     };
-    capture_with_timeout(command, Duration::from_secs(timeout))
+    capture_progress(command, Duration::from_secs(timeout), progress)
+}
+
+#[derive(Default)]
+struct OutputStream {
+    position: u64,
+    pending: Vec<u8>,
+}
+impl OutputStream {
+    fn drain(
+        &mut self,
+        file: &mut std::fs::File,
+        eof: bool,
+        progress: &mut impl FnMut(String),
+    ) -> Result<()> {
+        let length = file.metadata()?.len();
+        if length > 4 * 1024 * 1024 {
+            bail!("tool output exceeded its size limit");
+        }
+        file.seek(SeekFrom::Start(self.position))?;
+        self.position += Read::by_ref(file)
+            .take(length.saturating_sub(self.position))
+            .read_to_end(&mut self.pending)? as u64;
+        let mut cursor = 0;
+        while cursor < self.pending.len() {
+            match std::str::from_utf8(&self.pending[cursor..]) {
+                Ok(_) => {
+                    cursor = self.pending.len();
+                    break;
+                }
+                Err(error) => {
+                    cursor += error.valid_up_to();
+                    if let Some(length) = error.error_len() {
+                        cursor += length;
+                    } else {
+                        if eof {
+                            cursor = self.pending.len();
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if cursor > 0 {
+            progress(String::from_utf8_lossy(&self.pending[..cursor]).into_owned());
+            self.pending.drain(..cursor);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
@@ -257,6 +326,37 @@ mod tests {
         let mut command = Command::new("sh");
         command.args(["-c", "head -c 4194305 /dev/zero >&2"]);
         assert!(capture(command).is_err());
+    }
+    #[test]
+    fn progress_preserves_split_utf8_and_final_output() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut reader = temp.reopen().unwrap();
+        let mut stream = OutputStream::default();
+        let mut chunks = Vec::new();
+        std::fs::write(temp.path(), [0xe4, 0xb8]).unwrap();
+        stream
+            .drain(&mut reader, false, &mut |s| chunks.push(s))
+            .unwrap();
+        assert!(chunks.is_empty());
+        std::fs::write(temp.path(), [0xe4, 0xb8, 0xad]).unwrap();
+        stream
+            .drain(&mut reader, true, &mut |s| chunks.push(s))
+            .unwrap();
+        assert_eq!(chunks.concat(), "中");
+        chunks.clear();
+        std::fs::write(temp.path(), vec![0xff; 1024 * 1024]).unwrap();
+        stream = OutputStream::default();
+        stream
+            .drain(&mut reader, true, &mut |s| chunks.push(s))
+            .unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].chars().count(), 1024 * 1024);
+        chunks.clear();
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf last-output; printf last-error >&2"]);
+        capture_progress(command, Duration::from_secs(2), &mut |s| chunks.push(s)).unwrap();
+        let all = chunks.concat();
+        assert!(all.contains("last-output") && all.contains("last-error"));
     }
 }
 
