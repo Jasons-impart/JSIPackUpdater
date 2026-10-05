@@ -244,6 +244,10 @@ fn main() -> Result<ExitCode> {
                 minecraft_modpack_updater::tools::Tool::Bkmpw,
                 false,
             )?;
+            let _updater_guard = minecraft_modpack_updater::tools::tool_lock(
+                minecraft_modpack_updater::tools::Tool::Updater,
+                false,
+            )?;
             let executable = bkmpw_path(bkmpw)?;
             let report = updater::update(updater::UpdateRequest {
                 base_path: &base_tree,
@@ -420,6 +424,10 @@ fn run_remote_update(
     let installed = load_release_info(&instance_root)?;
     let _tool_guard = minecraft_modpack_updater::tools::tool_lock(
         minecraft_modpack_updater::tools::Tool::Bkmpw,
+        false,
+    )?;
+    let _updater_guard = minecraft_modpack_updater::tools::tool_lock(
+        minecraft_modpack_updater::tools::Tool::Updater,
         false,
     )?;
     let executable = bkmpw_path(args.bkmpw)?;
