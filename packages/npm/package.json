@@ -1,0 +1,9 @@
+{
+  "name": "@jsi-team/minecraft-modpack-updater",
+  "version": "0.1.0",
+  "description": "Minecraft modpack updater with CLI, TUI and GUI",
+  "bin": { "minecraft-modpack-updater": "bin/minecraft-modpack-updater.js" },
+  "files": ["bin", "README.md"],
+  "engines": { "node": ">=18" },
+  "repository": { "type": "git", "url": "git+https://github.com/Jasons-impart/JSIPackUpdater.git" }
+}
