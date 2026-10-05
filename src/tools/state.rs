@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     bkmpw,
-    safe_fs::{LocalArtifact, LocalFile, SafeRoot},
+    safe_fs::{LocalFile, SafeRoot},
 };
 use std::path::Path;
 
@@ -65,10 +65,26 @@ pub(crate) fn hash(path: &Path) -> Result<String> {
         .file_name()
         .and_then(|n| n.to_str())
         .context("invalid tool filename")?;
-    match root.hash_artifact(name)? {
-        LocalArtifact::File(h) => Ok(h.sha256),
-        _ => bail!("tool is not a regular file: {}", path.display()),
+    use sha2::Digest;
+    use std::io::Read;
+    let mut file = root.open_regular(name)?.context("tool is missing")?;
+    let mut digest = sha2::Sha256::new();
+    let mut bytes = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        bytes += count as u64;
+        if bytes > 256 * 1024 * 1024 {
+            bail!("tool exceeds 256 MiB");
+        }
+        digest.update(&buffer[..count]);
     }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn recorded(instance: &Path) -> Result<Option<Installation>> {
