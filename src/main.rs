@@ -21,6 +21,7 @@ mod tui;
 #[derive(Parser)]
 #[command(
     name = "minecraft-modpack-updater",
+    version,
     about = "Update an installed Minecraft modpack client or server instance"
 )]
 struct Cli {

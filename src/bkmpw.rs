@@ -173,6 +173,27 @@ pub fn verify_protocol(executable: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Inspect an installed tool without allowing discovery to wait for a sync timeout.
+pub fn installed_version(executable: &Path) -> Result<String> {
+    let event = run_with_timeout(
+        executable,
+        "protocol-version",
+        &[],
+        |_| {},
+        Duration::from_secs(15),
+    )?;
+    let data = event
+        .data
+        .context("bkmpw did not report protocol information")?;
+    if data.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
+        bail!("bkmpw machine protocol version is not 1");
+    }
+    data.get("cliVersion")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .context("bkmpw did not report its version")
+}
+
 pub fn prepare_pack(executable: &Path, source: &Path, progress: impl FnMut(&Event)) -> Result<()> {
     run(executable, "prepare-pack", &[source.as_os_str()], progress)?;
     Ok(())
