@@ -492,12 +492,17 @@ fn run_remote_update(
 }
 
 #[cfg(feature = "gui")]
-fn run_remote_preview(args: &RemoteArgs) -> Result<PreviewSummary> {
+fn run_remote_preview(
+    args: &RemoteArgs,
+    mut progress: impl FnMut(String),
+) -> Result<PreviewSummary> {
     let instance_root = SafeRoot::open(&args.instance)?;
     let installed = load_release_info(&instance_root)?;
     let github = GitHub::new(&args.repo, args.token.clone())?;
-    let base = github.fetch_snapshot(&installed.commit_id)?;
-    let destination = github.fetch_snapshot(&args.target)?;
+    let base =
+        github.fetch_snapshot_with_progress(&installed.commit_id, |p| progress(p.to_string()))?;
+    let destination =
+        github.fetch_snapshot_with_progress(&args.target, |p| progress(p.to_string()))?;
     let base_root = SafeRoot::open(base.root.path())?;
     let target_root = SafeRoot::open(destination.root.path())?;
     let check = check_components_roots(&base_root, &target_root, &instance_root)?;

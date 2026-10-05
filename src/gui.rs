@@ -433,7 +433,10 @@ impl GuiApp {
         }
         self.worker = Some(std::thread::spawn(move || {
             let result = if preview {
-                run_remote_preview(&args).map(|summary| {
+                run_remote_preview(&args, |line| {
+                    let _ = sender.send(Message::Progress(line));
+                    ctx.request_repaint();
+                }).map(|summary| {
                     let text = format!(
                         "源码检查完成：{} 项，{} 个冲突。\n模组与生成文件冲突会在更新准备时检查。\n{} → {}{}",
                         summary.item_count,
@@ -561,7 +564,10 @@ impl GuiApp {
         }
         for message in incoming {
             match message {
-                Message::Progress(line) => self.append(line),
+                Message::Progress(line) => {
+                    self.status = line.chars().take(300).collect();
+                    self.append(line);
+                }
                 Message::Preview {
                     summary,
                     repo,
