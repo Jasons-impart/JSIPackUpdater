@@ -361,11 +361,20 @@ mod tests {
 }
 
 pub(super) fn npm_binary(tool: Tool) -> Result<PathBuf> {
+    let root = npm_global_root()?;
+    npm_binary_in(tool, &root)
+}
+
+pub(super) fn npm_global_root() -> Result<PathBuf> {
     let root = npm(&["root", "--global"])?;
     let root = PathBuf::from(std::str::from_utf8(&root)?.trim());
     if !root.is_absolute() {
         bail!("npm root is not absolute");
     }
+    Ok(root)
+}
+
+fn npm_binary_in(tool: Tool, root: &std::path::Path) -> Result<PathBuf> {
     let suffix = match platform()? {
         "x86_64-unknown-linux-gnu" => "linux-x64",
         "x86_64-pc-windows-msvc" => "win32-x64",

@@ -71,7 +71,7 @@ struct Catalog {
     releases: Vec<ToolRelease>,
 }
 
-fn client() -> Result<Client> {
+pub(super) fn client() -> Result<Client> {
     Ok(Client::builder()
         .https_only(true)
         .connect_timeout(Duration::from_secs(10))

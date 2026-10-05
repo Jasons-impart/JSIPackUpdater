@@ -3,7 +3,9 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod acquire;
 mod locking;
+pub use acquire::{install, install_release, upgrade_bkmpw};
 mod process;
 pub mod progress;
 pub use locking::{ToolLock, tool_lock};
