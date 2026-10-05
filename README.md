@@ -4,7 +4,7 @@ Minecraft 整合包更新器。CLI、TUI 和可选的 egui GUI 共用 Rust 更�
 
 ## 使用
 
-先停止游戏或服务端，并备份整个实例。下载与操作系统相符的更新器压缩包，把其中的 `minecraft-modpack-updater` 和 `bkmpw` 放在同一目录。实例须含 `config/createdelight_release_info.json`。
+先停止游戏或服务端，并备份整个实例。下载与操作系统相符的更新器压缩包，运行其中的 `minecraft-modpack-updater`。更新器自动检测 bkmpw；缺少时可选择下载到实例目录或通过 npm 全局安装。实例须含 `config/createdelight_release_info.json`。安装、独立升级和下载进度见 [工具说明](docs/tools.md)。
 
 ```bash
 # 预览（不会写入实例）
@@ -41,6 +41,6 @@ cargo clippy --all-features --all-targets -- -D warnings
 cargo build --release --features gui
 ```
 
-`update-local` 和 `preview`/`preview-managed` 可用本地完整源码快照验证更新；快照目录须对应传入的完整 commit SHA。`update-local` 还需 `--base-commit`、`--target-commit`、`--base-tree`、`--target-tree`、`--instance`、`--side`，并可用 `--bkmpw` 指向协议兼容的本地程序。发布工作流在 Linux、Windows、macOS 构建并打包固定版本的原生 `bkmpw`，且验证其 SHA-256 与进度协议。
+`update-local` 和 `preview`/`preview-managed` 可用本地完整源码快照验证更新；快照目录须对应传入的完整 commit SHA。`update-local` 还需 `--base-commit`、`--target-commit`、`--base-tree`、`--target-tree`、`--instance`、`--side`，并可用 `--bkmpw` 指向协议兼容的本地程序。发布工作流在 Linux、Windows、macOS 构建更新器原生程序、便携包和 npm 平台包，独立验证推荐 bkmpw 并生成版本清单；发布包不夹带 bkmpw。
 
 实施细节和验收边界见 [实施计划](docs/implementation-plan.md)。
