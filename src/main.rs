@@ -240,6 +240,10 @@ fn main() -> Result<ExitCode> {
             if !base_commit.eq_ignore_ascii_case(&installed.commit_id) {
                 bail!("base snapshot commit does not match installed release marker");
             }
+            let _tool_guard = minecraft_modpack_updater::tools::tool_lock(
+                minecraft_modpack_updater::tools::Tool::Bkmpw,
+                false,
+            )?;
             let executable = bkmpw_path(bkmpw)?;
             let report = updater::update(updater::UpdateRequest {
                 base_path: &base_tree,
@@ -414,6 +418,10 @@ fn run_remote_update(
     }
     let instance_root = SafeRoot::open(&args.instance)?;
     let installed = load_release_info(&instance_root)?;
+    let _tool_guard = minecraft_modpack_updater::tools::tool_lock(
+        minecraft_modpack_updater::tools::Tool::Bkmpw,
+        false,
+    )?;
     let executable = bkmpw_path(args.bkmpw)?;
     instance_root.ensure_dir(".jsipack-updater/cache")?;
     let cache = args.instance.join(".jsipack-updater/cache");

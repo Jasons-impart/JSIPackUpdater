@@ -98,6 +98,11 @@ fn candidate(path: PathBuf, ownership: Ownership) -> Option<Installation> {
 }
 
 pub fn discover(instance: &Path) -> Result<Option<Installation>> {
+    let _guard = tool_lock(Tool::Bkmpw, false).context("another operation is changing bkmpw")?;
+    discover_unlocked(instance)
+}
+
+pub(super) fn discover_unlocked(instance: &Path) -> Result<Option<Installation>> {
     if let Some(installed) = recorded(instance)? {
         return Ok(Some(installed));
     }

@@ -70,6 +70,27 @@ fn set_readonly(dir: &Dir, name: &str, readonly: bool) -> Result<()> {
 }
 
 impl SafeRoot {
+    #[cfg(unix)]
+    pub fn ensure_private_dir(&self, relative: &str) -> Result<()> {
+        use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+        let parts = validate_relative(relative)?;
+        if parts.len() != 1 {
+            bail!("private directory must be a single component");
+        }
+        let name = std::ffi::CString::new(relative)?;
+        if unsafe { libc::mkdirat(self.dir.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != ErrorKind::AlreadyExists {
+                return Err(error.into());
+            }
+        }
+        let directory = open_directory(&self.dir, relative)?;
+        let metadata = directory.into_std_file().metadata()?;
+        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+            bail!("tool lock directory must be owned by this user and private (0700)");
+        }
+        Ok(())
+    }
     #[cfg(windows)]
     pub fn set_readonly(&self, relative: &str, readonly: bool) -> Result<()> {
         let (dir, name) = self.parent(relative, false)?;
@@ -93,7 +114,9 @@ impl SafeRoot {
         #[cfg(unix)]
         {
             use cap_std::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+            options
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         #[cfg(windows)]
         {

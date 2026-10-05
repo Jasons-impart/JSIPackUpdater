@@ -3,7 +3,9 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod locking;
 mod process;
+pub use locking::{ToolLock, tool_lock};
 mod releases;
 mod state;
 pub use releases::{ToolRelease, latest};
