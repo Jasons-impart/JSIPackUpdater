@@ -19,6 +19,8 @@ use conflicts::ConflictPanel;
 
 #[path = "gui_mod_changes.rs"]
 mod mod_changes;
+#[path = "gui_tools.rs"]
+mod tool_management;
 
 fn failure_hint(error: &str) -> &'static str {
     if error.contains("changes Minecraft/NeoForge") {
@@ -76,6 +78,7 @@ struct Inspection {
 }
 
 struct GuiApp {
+    tools: tool_management::ToolPanel,
     instance: String,
     selected_instance: Option<PathBuf>,
     target: String,
@@ -115,6 +118,7 @@ impl Default for GuiApp {
     fn default() -> Self {
         let (setup_tx, setup_rx) = mpsc::channel();
         Self {
+            tools: tool_management::ToolPanel::default(),
             instance: String::new(),
             selected_instance: None,
             target: String::new(),
@@ -188,6 +192,9 @@ impl GuiApp {
     }
 
     fn select_instance(&mut self, path: PathBuf, ctx: egui::Context) {
+        if self.running || self.tools.mutating() {
+            return;
+        }
         if self.inspecting {
             return;
         }
@@ -394,6 +401,9 @@ impl GuiApp {
     }
 
     fn start(&mut self, preview: bool, ctx: egui::Context) {
+        if self.running || self.tools.mutating() {
+            return;
+        }
         let Some(args) = self.remote_args() else {
             self.status = "请先选择实例和目标版本。".into();
             return;
@@ -476,6 +486,9 @@ impl GuiApp {
     }
 
     fn rollback(&mut self, ctx: egui::Context) {
+        if self.running || self.tools.mutating() {
+            return;
+        }
         let Some(instance) = self.instance_path() else {
             self.append("请先填写实例目录".into());
             return;
@@ -489,9 +502,15 @@ impl GuiApp {
         self.inspection_request += 1;
         self.inspecting = false;
         self.worker = Some(std::thread::spawn(move || {
-            let result = transaction::rollback(&instance)
-                .map(|()| "已从备份回退未完成更新".to_owned())
-                .map_err(|error| format!("{error:#}"));
+            let result = (|| -> Result<()> {
+                let _guard = minecraft_modpack_updater::tools::tool_lock(
+                    minecraft_modpack_updater::tools::Tool::Updater,
+                    false,
+                )?;
+                transaction::rollback(&instance)
+            })()
+            .map(|()| "已从备份回退未完成更新".to_owned())
+            .map_err(|error| format!("{error:#}"));
             let _ = sender.send(Message::Complete(result));
             ctx.request_repaint();
         }));
@@ -515,7 +534,10 @@ impl GuiApp {
             });
         }
         self.poll_setup();
-        if self.running && ctx.input(|input| input.viewport().close_requested()) {
+        self.tools.poll(ctx);
+        if (self.running || self.tools.mutating())
+            && ctx.input(|input| input.viewport().close_requested())
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         let mut incoming = Vec::new();
@@ -610,29 +632,32 @@ impl GuiApp {
                     ui.heading("1. 选择实例");
                     let mut chosen = None;
                     ui.horizontal(|ui| {
-                        ui.add_enabled_ui(!self.running && !self.inspecting, |ui| {
-                            egui::ComboBox::from_id_salt("instances")
-                                .selected_text("检测到的实例")
-                                .show_ui(ui, |ui| {
-                                    for path in &self.instances {
-                                        if ui
-                                            .selectable_label(
-                                                self.selected_instance.as_ref() == Some(path),
-                                                path.to_string_lossy(),
-                                            )
-                                            .clicked()
-                                        {
-                                            chosen = Some(path.clone());
+                        ui.add_enabled_ui(
+                            !self.running && !self.inspecting && !self.tools.mutating(),
+                            |ui| {
+                                egui::ComboBox::from_id_salt("instances")
+                                    .selected_text("检测到的实例")
+                                    .show_ui(ui, |ui| {
+                                        for path in &self.instances {
+                                            if ui
+                                                .selectable_label(
+                                                    self.selected_instance.as_ref() == Some(path),
+                                                    path.to_string_lossy(),
+                                                )
+                                                .clicked()
+                                            {
+                                                chosen = Some(path.clone());
+                                            }
                                         }
-                                    }
-                                    if self.instances.is_empty() {
-                                        ui.label("未发现实例，请选择文件夹");
-                                    }
-                                });
-                        });
+                                        if self.instances.is_empty() {
+                                            ui.label("未发现实例，请选择文件夹");
+                                        }
+                                    });
+                            },
+                        );
                         if ui
                             .add_enabled(
-                                !self.running && !self.inspecting,
+                                !self.running && !self.inspecting && !self.tools.mutating(),
                                 egui::Button::new("选择文件夹…"),
                             )
                             .clicked()
@@ -718,7 +743,7 @@ impl GuiApp {
                                 ui.add(egui::TextEdit::singleline(&mut self.token).password(true));
                             });
                             ui.horizontal(|ui| {
-                                ui.label("bkmpw 路径（留空使用随附版本）");
+                                ui.label("bkmpw 路径（留空自动检测）");
                                 if ui
                                     .add_enabled(
                                         !self.running,
@@ -754,11 +779,18 @@ impl GuiApp {
                     if self.side != selection_before.2 {
                         self.side_revision += 1;
                     }
+                    let tool_instance = self.instance_path();
+                    self.tools.show(
+                        ui,
+                        tool_instance,
+                        !self.running && !self.pending && !self.inspecting,
+                    );
                     ui.add_enabled_ui(!self.running && !self.pending, |ui| {
                         self.conflicts.show(ui);
                     });
                     ui.horizontal(|ui| {
                         let ready = !self.running
+                            && !self.tools.mutating()
                             && !self.inspecting
                             && self.installed.is_some()
                             && !self.pending
@@ -780,7 +812,9 @@ impl GuiApp {
                         }
                         if ui
                             .add_enabled(
-                                ready && self.conflicts.ready(),
+                                ready
+                                    && self.conflicts.ready()
+                                    && (self.bkmpw_path().is_some() || !self.tools.missing()),
                                 egui::Button::new(if !self.conflicts.paths.is_empty() {
                                     "继续更新"
                                 } else if self.failed && self.operation == Operation::Update {
@@ -796,7 +830,7 @@ impl GuiApp {
                         if self.pending
                             && ui
                                 .add_enabled(
-                                    !self.running && !self.inspecting,
+                                    !self.running && !self.inspecting && !self.tools.mutating(),
                                     egui::Button::new("恢复更新前的文件"),
                                 )
                                 .clicked()
