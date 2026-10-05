@@ -31,6 +31,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    SelfUpdateHelper { instance: PathBuf, request: String },
     /// Show update progress in a terminal window.
     Tui {
         #[arg(long)]
@@ -194,10 +196,14 @@ fn main() -> Result<ExitCode> {
     #[cfg(feature = "gui")]
     if std::env::args_os().nth(1).is_none() {
         gui::run()?;
+        minecraft_modpack_updater::tools::launch_prepared_update()?;
         return Ok(ExitCode::SUCCESS);
     }
     let Cli { command } = Cli::parse();
     match command {
+        Command::SelfUpdateHelper { instance, request } => {
+            minecraft_modpack_updater::tools::finish_self_update(&instance, &request)?
+        }
         Command::Tui {
             instance,
             target,
@@ -389,6 +395,7 @@ fn main() -> Result<ExitCode> {
             }
         }
     }
+    minecraft_modpack_updater::tools::launch_prepared_update()?;
     Ok(ExitCode::SUCCESS)
 }
 

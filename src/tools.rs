@@ -11,8 +11,10 @@ pub mod progress;
 pub use locking::{ToolLock, tool_lock};
 pub use progress::Progress;
 mod releases;
+mod self_update;
 mod state;
 pub use releases::{ToolRelease, latest};
+pub use self_update::{finish_self_update, launch_prepared_update, prepare_self_update};
 pub use state::{current_updater, discover, save};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
