@@ -1,6 +1,6 @@
 {
   "name": "@jsi-team/minecraft-modpack-updater",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Minecraft modpack updater with CLI, TUI and GUI",
   "bin": { "minecraft-modpack-updater": "bin/minecraft-modpack-updater.js" },
   "files": ["bin", "README.md"],

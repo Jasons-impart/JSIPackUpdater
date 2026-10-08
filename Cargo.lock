@@ -1674,37 +1674,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "minecraft-modpack-updater"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "cap-std",
- "chrono",
- "clap",
- "crossterm",
- "diffy",
- "eframe",
- "flate2",
- "fs2",
- "libc",
- "process-wrap",
- "ratatui",
- "reqwest",
- "rfd",
- "rpassword",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "tar",
- "tempfile",
- "toml",
- "unicode-normalization",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1826,6 +1795,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "minecraft-modpack-updater"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "base64",
+ "cap-std",
+ "chrono",
+ "clap",
+ "crossterm",
+ "diffy",
+ "eframe",
+ "flate2",
+ "fs2",
+ "libc",
+ "process-wrap",
+ "ratatui",
+ "reqwest",
+ "rfd",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tar",
+ "tempfile",
+ "toml",
+ "unicode-normalization",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
