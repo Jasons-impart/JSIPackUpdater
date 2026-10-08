@@ -4,10 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import vm from "node:vm";
 import { spawn, spawnSync } from "node:child_process";
 
 const version = fs.readFileSync("Cargo.toml", "utf8").match(/^version\s*=\s*"([^"]+)"/m)[1];
-const targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin"];
+const targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin"];
 async function fixture(run) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mmpu-npm-test-"));
   try {
@@ -25,29 +26,36 @@ async function fixture(run) {
 function prepare(directory, assets, requestedVersion = version) {
   return spawnSync(process.execPath, ["scripts/prepare-npm.mjs", assets, path.join(directory, "packages"), requestedVersion], { encoding: "utf8" });
 }
-test("pack five packages and execute the platform wrapper with args and npm provenance", () => fixture((directory, assets) => {
+test("pack seven packages and execute the platform wrapper with args and npm provenance", () => fixture((directory, assets) => {
   const result = prepare(directory, assets);
   assert.equal(result.status, 0, result.stderr);
   const output = path.join(directory, "packages");
-  assert.equal(fs.readdirSync(output).filter(name => name.endsWith(".tgz")).length, 5);
+  assert.equal(fs.readdirSync(output).filter(name => name.endsWith(".tgz")).length, 7);
   const metadata = JSON.parse(fs.readFileSync(path.join(output, "main/package.json")));
   assert.equal(metadata.name, "@jsi-team/minecraft-modpack-updater");
-  assert.equal(Object.keys(metadata.optionalDependencies).length, 4);
-  if (process.platform !== "linux" || process.arch !== "x64") return;
+  assert.equal(Object.keys(metadata.optionalDependencies).length, 6);
+  for (const [suffix, platform, arch] of [["linux-arm64", "linux", "arm64"], ["win32-arm64", "win32", "arm64"]]) {
+    const native = JSON.parse(fs.readFileSync(path.join(output, suffix, "package.json")));
+    assert.deepEqual(native.os, [platform]);
+    assert.deepEqual(native.cpu, [arch]);
+    assert.equal(metadata.optionalDependencies[native.name], version);
+  }
+  if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) return;
+  const hostSuffix = `linux-${process.arch}`;
   const consumer = path.join(directory, "consumer");
   fs.mkdirSync(consumer);
   fs.writeFileSync(path.join(consumer, "package.json"), JSON.stringify({ private: true }));
   const install = spawnSync("npm", ["install", "--offline", "--omit=optional", "--ignore-scripts", "--no-audit", "--no-fund",
     path.join(output, `jsi-team-minecraft-modpack-updater-${version}.tgz`),
-    path.join(output, `jsi-team-minecraft-modpack-updater-linux-x64-${version}.tgz`)], { cwd: consumer, encoding: "utf8" });
+    path.join(output, `jsi-team-minecraft-modpack-updater-${hostSuffix}-${version}.tgz`)], { cwd: consumer, encoding: "utf8" });
   assert.equal(install.status, 0, install.stderr);
   const installedBin = path.join(consumer, "node_modules/.bin/minecraft-modpack-updater");
   const consumed = spawnSync(installedBin, ["--version", "a path with spaces"], { encoding: "utf8" });
   assert.equal(consumed.status, 7, consumed.stderr);
   assert.equal(consumed.stdout, "1\n--version\na path with spaces\n");
-  const installed = path.join(output, "main/node_modules/@jsi-team/minecraft-modpack-updater-linux-x64");
+  const installed = path.join(output, `main/node_modules/@jsi-team/minecraft-modpack-updater-${hostSuffix}`);
   fs.mkdirSync(path.dirname(installed), { recursive: true });
-  fs.cpSync(path.join(output, "linux-x64"), installed, { recursive: true });
+  fs.cpSync(path.join(output, hostSuffix), installed, { recursive: true });
   const launch = spawnSync(process.execPath, [path.join(output, "main/bin/minecraft-modpack-updater.js"), "--version", "a path with spaces"], { encoding: "utf8" });
   assert.equal(launch.status, 7);
   assert.equal(launch.stdout, "1\n--version\na path with spaces\n");
@@ -101,8 +109,8 @@ state.published.push(spec); fs.writeFileSync(statePath, JSON.stringify(state));
   const retry = publish();
   assert.equal(retry.status, 0, retry.stderr);
   const completed = JSON.parse(fs.readFileSync(state));
-  assert.equal(completed.published.length, 5);
-  assert.equal(new Set(completed.published).size, 5);
+  assert.equal(completed.published.length, 7);
+  assert.equal(new Set(completed.published).size, 7);
   assert.equal(completed.published.at(-1), `@jsi-team/minecraft-modpack-updater@${version}`);
   completed.authError = true;
   fs.writeFileSync(state, JSON.stringify(completed));
@@ -116,13 +124,14 @@ state.published.push(spec); fs.writeFileSync(statePath, JSON.stringify(state));
   assert.notEqual(changed.status, 0);
   assert.match(changed.stderr, /differs from this artifact/);
 }));
-test("a signal addressed to the launcher also stops its native child", { skip: process.platform !== "linux" || process.arch !== "x64" }, () => fixture(async (directory, assets) => {
+test("a signal addressed to the launcher also stops its native child", { skip: process.platform !== "linux" || !["x64", "arm64"].includes(process.arch) }, () => fixture(async (directory, assets) => {
   const prepared = prepare(directory, assets);
   assert.equal(prepared.status, 0, prepared.stderr);
   const output = path.join(directory, "packages");
-  const installed = path.join(output, "main/node_modules/@jsi-team/minecraft-modpack-updater-linux-x64");
+  const hostSuffix = `linux-${process.arch}`;
+  const installed = path.join(output, `main/node_modules/@jsi-team/minecraft-modpack-updater-${hostSuffix}`);
   fs.mkdirSync(path.dirname(installed), { recursive: true });
-  fs.cpSync(path.join(output, "linux-x64"), installed, { recursive: true });
+  fs.cpSync(path.join(output, hostSuffix), installed, { recursive: true });
   const pidFile = path.join(directory, "native.pid");
   const launcher = spawn(process.execPath, [path.join(output, "main/bin/minecraft-modpack-updater.js"), "--wait", pidFile], { stdio: "ignore" });
   let nativePid, timer;
@@ -145,3 +154,31 @@ test("a signal addressed to the launcher also stops its native child", { skip: p
     if (nativePid) { try { process.kill(nativePid, "SIGKILL"); } catch { /* already reaped */ } }
   }
 }));
+
+test("ARM64 launchers resolve the native package and preserve executable suffix and args", () => {
+  const source = fs.readFileSync("packages/npm/bin/minecraft-modpack-updater.js", "utf8");
+  for (const platform of ["linux", "win32"]) {
+    const packageName = `@jsi-team/minecraft-modpack-updater-${platform}-arm64`;
+    let spawned = false;
+    const mockRequire = name => {
+      if (name === "node:path") return path;
+      assert.equal(name, "node:child_process");
+      return { spawn(binary, args, options) {
+        spawned = true;
+        assert.equal(binary, path.join("native", `minecraft-modpack-updater${platform === "win32" ? ".exe" : ""}`));
+        assert.deepEqual(Array.from(args), ["gui", "a path with spaces"]);
+        assert.equal(options.env.MMPU_MANAGED_BY_NPM, "1");
+        return { once() {}, kill() {} };
+      } };
+    };
+    mockRequire.resolve = name => {
+      assert.equal(name, `${packageName}/package.json`);
+      return path.join("native", "package.json");
+    };
+    vm.runInNewContext(source, { require: mockRequire, console, process: {
+      platform, arch: "arm64", argv: ["node", "launcher", "gui", "a path with spaces"], env: {},
+      on() {}, exit() { assert.fail("ARM64 launcher must resolve successfully"); }
+    } });
+    assert.ok(spawned);
+  }
+});

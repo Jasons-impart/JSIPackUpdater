@@ -27,8 +27,14 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             suffix: ''
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            suffix: ''
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            suffix: .exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
             suffix: .exe
           - os: macos-15-intel
             target: x86_64-apple-darwin
@@ -43,7 +49,8 @@ jobs:
           ref: refs/tags/${{ inputs.updater_tag }}
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
+          architecture: ${{ startsWith(matrix.target, 'aarch64-') && 'arm64' || 'x64' }}
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
       - name: Validate inputs and tested updater version
         shell: bash
@@ -67,6 +74,8 @@ jobs:
           SUFFIX: ${{ matrix.suffix }}
         run: |
           mkdir -p compatibility
+          gh release view "$BKMPW_TAG" --repo bro-know-my-org/BroKnowMyPackwiz --json tagName,isDraft,isPrerelease > compatibility/release.json
+          python scripts/tool-catalog.py validate-release --tag "$BKMPW_TAG" --metadata compatibility/release.json
           asset="bkmpw-$BKMPW_TAG-$TARGET$SUFFIX"
           gh release download "$BKMPW_TAG" --repo bro-know-my-org/BroKnowMyPackwiz --pattern "$asset" --pattern "$asset.sha256" --dir compatibility
           chmod +x "compatibility/$asset"
@@ -94,7 +103,7 @@ jobs:
           ref: refs/tags/${{ inputs.updater_tag }}
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
       - uses: actions/download-artifact@v4
         with:
           pattern: tested-bkmpw-*

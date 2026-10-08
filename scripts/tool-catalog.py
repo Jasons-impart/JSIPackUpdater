@@ -9,7 +9,8 @@ import subprocess
 import tomllib
 
 TARGETS = (
-    "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc",
     "x86_64-apple-darwin", "aarch64-apple-darwin",
 )
 REPOSITORIES = {"bkmpw": "bro-know-my-org/BroKnowMyPackwiz", "updater": "Jasons-impart/JSIPackUpdater"}
@@ -22,6 +23,12 @@ def version(value):
 
 def tested_updater_version():
     return version(tomllib.loads(pathlib.Path("Cargo.toml").read_text())["package"]["version"])
+
+def validate_release(args):
+    metadata = json.loads(args.metadata.read_text())
+    if (args.tag != "v" + version(args.tag) or metadata.get("tagName") != args.tag
+            or metadata.get("isDraft") is not False or metadata.get("isPrerelease") is not False):
+        raise ValueError("official published stable release required")
 
 def entry(tool, tag, target, digest, minimum_updater=None):
     tag = version(tag)
@@ -92,6 +99,9 @@ def refresh(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
+    release = commands.add_parser("validate-release")
+    release.add_argument("--tag", required=True)
+    release.add_argument("--metadata", type=pathlib.Path, required=True)
     verify = commands.add_parser("verify-bkmpw")
     verify.add_argument("--binary", type=pathlib.Path, required=True)
     verify.add_argument("--sha256", required=True)
@@ -107,4 +117,4 @@ if __name__ == "__main__":
     update.add_argument("--existing", type=pathlib.Path, required=True)
     update.add_argument("--output", type=pathlib.Path, required=True)
     args = parser.parse_args()
-    {"verify-bkmpw": verify_bkmpw, "catalog": catalog, "refresh": refresh}[args.command](args)
+    {"validate-release": validate_release, "verify-bkmpw": verify_bkmpw, "catalog": catalog, "refresh": refresh}[args.command](args)

@@ -74,13 +74,35 @@ pub struct Installation {
 }
 
 pub fn platform() -> Result<&'static str> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
+    platform_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn platform_for(os: &str, arch: &str) -> Result<&'static str> {
+    match (os, arch) {
         ("linux", "x86_64") => Ok("x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64") => Ok("aarch64-unknown-linux-gnu"),
         ("windows", "x86_64") => Ok("x86_64-pc-windows-msvc"),
+        ("windows", "aarch64") => Ok("aarch64-pc-windows-msvc"),
         ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
         _ => bail!("no tools are published for this platform"),
     }
+}
+
+#[cfg(test)]
+#[test]
+fn platform_selection_includes_native_arm64_targets() {
+    for (os, arch, target) in [
+        ("linux", "x86_64", "x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64", "aarch64-unknown-linux-gnu"),
+        ("windows", "x86_64", "x86_64-pc-windows-msvc"),
+        ("windows", "aarch64", "aarch64-pc-windows-msvc"),
+        ("macos", "x86_64", "x86_64-apple-darwin"),
+        ("macos", "aarch64", "aarch64-apple-darwin"),
+    ] {
+        assert_eq!(platform_for(os, arch).unwrap(), target);
+    }
+    assert!(platform_for("linux", "arm").is_err());
 }
 
 pub fn normalized_version(version: &str) -> Result<String> {

@@ -37,7 +37,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_generate_and_refresh_preserves_all_updater_assets(self):
         original = self.generate()
-        self.assertEqual(len(original["releases"]), 8)
+        self.assertEqual(len(original["releases"]), 12)
         for target in catalog.TARGETS:
             self.write_bkmpw(target, "0.2.6")
         refreshed = self.assets / "refreshed.json"
@@ -61,6 +61,29 @@ class CatalogTests(unittest.TestCase):
         entry_path.write_text(json.dumps(item))
         with self.assertRaisesRegex(ValueError, "invalid tested bkmpw entry"):
             catalog.refresh(types.SimpleNamespace(assets=self.assets, existing=self.output, output=self.output))
+
+    def test_missing_arm_candidate_prevents_publication_of_a_partial_catalog(self):
+        for target in ("aarch64-unknown-linux-gnu", "aarch64-pc-windows-msvc"):
+            with self.subTest(target=target):
+                record = self.assets / f"bkmpw-{target}.json"
+                saved = record.read_bytes()
+                record.unlink()
+                with self.assertRaises(FileNotFoundError):
+                    self.generate()
+                self.assertFalse(self.output.exists())
+                record.write_bytes(saved)
+
+    def test_only_matching_published_stable_releases_can_be_recommended(self):
+        metadata = self.assets / "release.json"
+        args = types.SimpleNamespace(tag="v0.2.6", metadata=metadata)
+        valid = dict(tagName=args.tag, isDraft=False, isPrerelease=False)
+        metadata.write_text(json.dumps(valid))
+        catalog.validate_release(args)
+        for change in (dict(isDraft=True), dict(isPrerelease=True), dict(tagName="v0.2.5"), dict(isDraft=None)):
+            with self.subTest(change=change):
+                metadata.write_text(json.dumps(valid | change))
+                with self.assertRaisesRegex(ValueError, "published stable"):
+                    catalog.validate_release(args)
 
     def test_incompatible_protocol_and_hash_never_produce_tested_record(self):
         binary = self.assets / "bkmpw"

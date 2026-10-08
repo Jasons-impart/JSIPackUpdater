@@ -378,7 +378,9 @@ pub(super) fn npm_global_root() -> Result<PathBuf> {
 fn npm_binary_in(tool: Tool, root: &std::path::Path) -> Result<PathBuf> {
     let suffix = match platform()? {
         "x86_64-unknown-linux-gnu" => "linux-x64",
+        "aarch64-unknown-linux-gnu" => "linux-arm64",
         "x86_64-pc-windows-msvc" => "win32-x64",
+        "aarch64-pc-windows-msvc" => "win32-arm64",
         "x86_64-apple-darwin" => "darwin-x64",
         "aarch64-apple-darwin" => "darwin-arm64",
         _ => unreachable!(),
@@ -410,4 +412,30 @@ fn npm_binary_in(tool: Tool, root: &std::path::Path) -> Result<PathBuf> {
         .context("npm native platform package is missing")?
         .canonicalize()
         .context("resolving npm native tool")
+}
+
+#[cfg(test)]
+#[test]
+fn npm_discovery_selects_the_host_native_file_for_both_tools() {
+    let root = tempfile::TempDir::new().unwrap();
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "win32",
+        os => os,
+    };
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        arch => arch,
+    };
+    for tool in [Tool::Bkmpw, Tool::Updater] {
+        let native = root.path().join(format!("{}-{os}-{arch}", tool.package()));
+        std::fs::create_dir_all(&native).unwrap();
+        let file = native.join(tool.executable());
+        std::fs::write(&file, b"native file fixture").unwrap();
+        assert_eq!(
+            npm_binary_in(tool, root.path()).unwrap(),
+            file.canonicalize().unwrap()
+        );
+    }
 }

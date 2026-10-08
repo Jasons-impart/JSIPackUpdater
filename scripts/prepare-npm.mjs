@@ -13,7 +13,9 @@ const output = path.resolve(destination);
 fs.mkdirSync(output, { recursive: true });
 const platforms = [
   ["linux-x64", "linux", "x64", "x86_64-unknown-linux-gnu", ""],
+  ["linux-arm64", "linux", "arm64", "aarch64-unknown-linux-gnu", ""],
   ["win32-x64", "win32", "x64", "x86_64-pc-windows-msvc", ".exe"],
+  ["win32-arm64", "win32", "arm64", "aarch64-pc-windows-msvc", ".exe"],
   ["darwin-x64", "darwin", "x64", "x86_64-apple-darwin", ""],
   ["darwin-arm64", "darwin", "arm64", "aarch64-apple-darwin", ""]
 ];
