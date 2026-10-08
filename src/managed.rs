@@ -382,12 +382,11 @@ mod tests {
     use super::*;
     use sha1::{Digest, Sha1};
     use std::fs;
-    use tempfile::TempDir;
 
     #[test]
     fn carries_selected_and_declined_optional_choices() {
-        let base = TempDir::new().unwrap();
-        let target = TempDir::new().unwrap();
+        let base = crate::safe_fs::temp_dir().unwrap();
+        let target = crate::safe_fs::temp_dir().unwrap();
         for root in [base.path(), target.path()] {
             fs::create_dir_all(root.join("mods/common")).unwrap();
         }
@@ -438,8 +437,8 @@ mod tests {
 
     #[test]
     fn adopts_only_verified_side_files_and_preserves_private_files() {
-        let base = TempDir::new().unwrap();
-        let instance = TempDir::new().unwrap();
+        let base = crate::safe_fs::temp_dir().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
         for root in [base.path(), instance.path()] {
             fs::create_dir_all(root.join("mods/client")).unwrap();
             fs::create_dir_all(root.join("mods/server")).unwrap();
@@ -486,8 +485,8 @@ mod tests {
 
     #[test]
     fn case_conflicting_private_file_blocks_adoption() {
-        let base = TempDir::new().unwrap();
-        let instance = TempDir::new().unwrap();
+        let base = crate::safe_fs::temp_dir().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
         fs::create_dir_all(base.path().join("mods/client")).unwrap();
         fs::create_dir_all(instance.path().join("mods")).unwrap();
         let hash = format!("{:x}", Sha1::digest(b"known"));
@@ -508,7 +507,7 @@ mod tests {
 
     #[test]
     fn invalid_manifest_entry_is_rejected_even_with_case_collision() {
-        let instance = TempDir::new().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
         fs::create_dir_all(instance.path().join("Saves")).unwrap();
         let manifest = Manifest {
             format: "bkmpw:1".into(),
@@ -531,8 +530,8 @@ mod tests {
 
     #[test]
     fn common_directory_rejects_client_only_metadata() {
-        let base = TempDir::new().unwrap();
-        let instance = TempDir::new().unwrap();
+        let base = crate::safe_fs::temp_dir().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
         fs::create_dir_all(base.path().join("mods/common")).unwrap();
         fs::write(
             base.path().join("mods/common/contradiction.pw.toml"),

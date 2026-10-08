@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn portable_replacement_preserves_backup_and_rolls_back_startup_failure() {
         for (fail, cached) in [(false, false), (true, false), (false, true)] {
-            let temp = tempfile::TempDir::new().unwrap();
+            let temp = crate::safe_fs::temp_dir().unwrap();
             let instance = temp.path().canonicalize().unwrap();
             let root = SafeRoot::open(&instance).unwrap();
             let original = std::env::current_exe().unwrap().canonicalize().unwrap();

@@ -28,11 +28,21 @@ fn npm_child() {
 #[test]
 fn interrupted_npm_keeps_a_discoverable_backup_and_cleanup_failure_is_reported() {
     for case in ["interrupt", "cleanup"] {
-        let temp = tempfile::TempDir::new().unwrap();
+        let temp = crate::safe_fs::temp_dir().unwrap();
         let instance = temp.path().canonicalize().unwrap();
         let global = instance.join("global/node_modules");
         std::fs::create_dir_all(&global).unwrap();
-        let native = global.join("@bro-know-my/packwiz-linux-x64/bkmpw");
+        let os = if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            "linux"
+        };
+        let arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "x64"
+        };
+        let native = global.join(format!("@bro-know-my/packwiz-{os}-{arch}/bkmpw"));
         let script = bkmpw_script("0.2.4");
         if case == "interrupt" {
             executable(&native, &script);

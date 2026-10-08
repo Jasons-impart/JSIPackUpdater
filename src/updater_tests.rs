@@ -3,6 +3,7 @@ use sha1::{Digest as _, Sha1};
 use sha2::Sha256;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use tempfile::TempDir;
 
 struct Fixture {
     root: TempDir,
@@ -10,7 +11,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = TempDir::new().unwrap();
+        let root = crate::safe_fs::temp_dir().unwrap();
         for name in ["base", "target", "instance"] {
             fs::create_dir_all(root.path().join(name).join("pack")).unwrap();
             fs::create_dir_all(root.path().join(name).join("mods/common")).unwrap();
@@ -119,7 +120,7 @@ esac
 
 #[test]
 fn seeds_verified_managed_files_without_copying_local_modifications() {
-    let root = TempDir::new().unwrap();
+    let root = crate::safe_fs::temp_dir().unwrap();
     let instance_path = root.path().join("instance");
     let artifacts_path = root.path().join("artifacts");
     fs::create_dir_all(instance_path.join("mods")).unwrap();

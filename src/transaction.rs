@@ -408,8 +408,8 @@ mod tests {
 
     #[test]
     fn interrupted_update_rolls_back_files_and_marker() {
-        let instance = tempfile::TempDir::new().unwrap();
-        let prepared = tempfile::TempDir::new().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
+        let prepared = crate::safe_fs::temp_dir().unwrap();
         for root in [instance.path(), prepared.path()] {
             fs::create_dir_all(root.join("config")).unwrap();
         }
@@ -453,8 +453,8 @@ mod tests {
 
     #[test]
     fn preparation_error_removes_unpublished_backups() {
-        let instance = tempfile::TempDir::new().unwrap();
-        let prepared = tempfile::TempDir::new().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
+        let prepared = crate::safe_fs::temp_dir().unwrap();
         fs::create_dir_all(instance.path().join("config")).unwrap();
         fs::create_dir_all(prepared.path().join("config")).unwrap();
         fs::write(instance.path().join("a"), b"old").unwrap();
@@ -496,8 +496,8 @@ mod tests {
 
     #[test]
     fn changed_retained_artifact_blocks_completion() {
-        let instance = tempfile::TempDir::new().unwrap();
-        let prepared = tempfile::TempDir::new().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
+        let prepared = crate::safe_fs::temp_dir().unwrap();
         fs::create_dir_all(instance.path().join("config")).unwrap();
         fs::create_dir_all(prepared.path().join("config")).unwrap();
         fs::write(instance.path().join("retained.jar"), b"changed").unwrap();
@@ -527,8 +527,8 @@ mod tests {
 
     #[test]
     fn lock_cannot_be_used_for_another_instance() {
-        let first = tempfile::TempDir::new().unwrap();
-        let second = tempfile::TempDir::new().unwrap();
+        let first = crate::safe_fs::temp_dir().unwrap();
+        let second = crate::safe_fs::temp_dir().unwrap();
         let prepared = SafeRoot::open(first.path()).unwrap();
         let guard = lock_instance(first.path()).unwrap();
         let error =
@@ -539,10 +539,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn moved_locked_instance_never_writes_replacement_directory() {
-        let parent = tempfile::TempDir::new().unwrap();
+        let parent = crate::safe_fs::temp_dir().unwrap();
         let original = parent.path().join("instance");
         let moved = parent.path().join("moved");
-        let prepared_dir = tempfile::TempDir::new().unwrap();
+        let prepared_dir = crate::safe_fs::temp_dir().unwrap();
         fs::create_dir_all(original.join("config")).unwrap();
         fs::create_dir_all(prepared_dir.path().join("config")).unwrap();
         fs::write(original.join(MARKER), b"A").unwrap();
@@ -564,8 +564,8 @@ mod tests {
 
     #[test]
     fn edit_after_an_earlier_write_blocks_release_marker() {
-        let instance = tempfile::TempDir::new().unwrap();
-        let prepared = tempfile::TempDir::new().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
+        let prepared = crate::safe_fs::temp_dir().unwrap();
         for root in [instance.path(), prepared.path()] {
             fs::create_dir_all(root.join("config")).unwrap();
         }
@@ -605,8 +605,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn rollback_skips_unchanged_readonly_file() {
-        let instance = tempfile::TempDir::new().unwrap();
-        let prepared = tempfile::TempDir::new().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
+        let prepared = crate::safe_fs::temp_dir().unwrap();
         for root in [instance.path(), prepared.path()] {
             fs::create_dir_all(root.join("config")).unwrap();
         }

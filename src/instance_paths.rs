@@ -248,11 +248,14 @@ pub(super) fn child_directories(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::selected_path;
     use super::{
         browser_start, child_directories, directory_suggestions, discovered_in_roots, expand_home,
-        home_dir, preferred_browser_root, selected_path, suggestion_worker,
+        home_dir, preferred_browser_root, suggestion_worker,
     };
     use std::fs;
+    #[cfg(unix)]
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;
 

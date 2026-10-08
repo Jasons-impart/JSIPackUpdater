@@ -175,7 +175,7 @@ mod tests {
     }
     #[test]
     fn local_records_cannot_execute_an_arbitrary_path() {
-        let root = tempfile::TempDir::new().unwrap();
+        let root = crate::safe_fs::temp_dir().unwrap();
         let installed = Installation {
             tool: Tool::Bkmpw,
             version: "0.2.5".into(),
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn prefixed_versions_keep_recorded_ownership_and_bad_candidates_fall_through() {
-        let root = tempfile::TempDir::new().unwrap();
+        let root = crate::safe_fs::temp_dir().unwrap();
         let path = fake(root.path(), "v0.2.5");
         let installed = candidate(path.clone(), Ownership::Npm).unwrap();
         save(root.path(), &installed).unwrap();

@@ -11,7 +11,6 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use tempfile::TempDir;
 
 const MARKER: &str = "config/createdelight_release_info.json";
 
@@ -214,7 +213,7 @@ pub fn update_with_progress(
         initial_hashes.insert(path.clone(), transaction::hash(&instance, &path)?);
     }
     bkmpw::verify_protocol(bkmpw_executable)?;
-    let work = TempDir::new().context("creating update preparation directory")?;
+    let work = crate::safe_fs::temp_dir().context("creating update preparation directory")?;
     let source_path = work.path().join("source");
     let artifacts_path = work.path().join("artifacts");
     let prepared_path = work.path().join("prepared");

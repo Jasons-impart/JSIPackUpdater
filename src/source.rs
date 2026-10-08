@@ -322,7 +322,7 @@ impl GitHub {
             && paths.len() == files.len()
             && paths.iter().all(|path| files.contains_key(path))
         {
-            let output = TempDir::new()?;
+            let output = crate::safe_fs::temp_dir()?;
             let output_root = SafeRoot::open(output.path())?;
             let mut valid = true;
             for (path, entry) in &files {
@@ -463,7 +463,7 @@ impl GitHub {
         budget.check()?;
         let files = self.fetch_tree(&commit.commit.tree.sha, &budget)?;
         let expected_bytes = self.check_budget(&files)?;
-        let root = TempDir::new().context("creating source snapshot directory")?;
+        let root = crate::safe_fs::temp_dir().context("creating source snapshot directory")?;
         let required_space = required_disk_space(expected_bytes, files.keys().map(String::as_str))?;
         let available = fs2::available_space(root.path())?;
         if required_space > available {
@@ -1162,7 +1162,7 @@ mod tests {
         }
         let (base, server) = serve(responses);
         let github = GitHub::with_api("owner/repo", None, &base).unwrap();
-        let cache = TempDir::new().unwrap();
+        let cache = crate::safe_fs::temp_dir().unwrap();
         let first = github.fetch_snapshot_cached(&commit, cache.path()).unwrap();
         assert_eq!(
             fs::read(first.root.path().join("file.txt")).unwrap(),
@@ -1234,7 +1234,7 @@ mod tests {
             ("/devtool.bat", original.to_vec()),
         ]);
         let github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         let mut progress = Vec::new();
         github
             .download_archive_progress(
@@ -1467,7 +1467,7 @@ mod tests {
                 size: Some(3),
             },
         );
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         let error = github
             .download_archive(
                 &"a".repeat(40),
@@ -1503,7 +1503,7 @@ mod tests {
                 size: Some(3),
             },
         )]);
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         let error = github
             .download_archive(
                 &"a".repeat(40),
@@ -1531,7 +1531,7 @@ mod tests {
         let bytes = builder.into_inner().unwrap().finish().unwrap();
         let (base, server) = serve(vec![("/tarball/", bytes)]);
         let github = GitHub::with_api("owner/repo", None, &base).unwrap();
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         let error = github
             .download_archive(
                 &"a".repeat(40),
@@ -1574,7 +1574,7 @@ mod tests {
             ("/pointer", original.to_vec()),
         ]);
         let github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         github
             .download_archive(&commit, &files, output.path(), &mut FetchBudget::new())
             .unwrap();
@@ -1608,7 +1608,7 @@ mod tests {
             ("/pointer", original.to_vec()),
         ]);
         let github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         github
             .download_archive(
                 &"a".repeat(40),
@@ -1670,7 +1670,7 @@ mod tests {
                 max_files: 1000,
             })
             .unwrap();
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         github
             .download_archive(
                 &"a".repeat(40),
@@ -1742,7 +1742,7 @@ mod tests {
         }
         let (base, server) = serve(vec![("/tarball/", pax_size_archive(3, b"abc", true))]);
         let github = GitHub::with_api("owner/repo", None, &base).unwrap();
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         github
             .download_archive(
                 &"a".repeat(40),
@@ -1793,7 +1793,7 @@ mod tests {
         );
         let (base, server) = serve(vec![("/tarball/", gzip.finish().unwrap())]);
         let github = GitHub::with_api("owner/repo", None, &base).unwrap();
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         github
             .download_archive(
                 &"a".repeat(40),
@@ -1825,7 +1825,7 @@ mod tests {
             ("/a", original.to_vec()),
         ]);
         let github = GitHub::with_endpoints("owner/repo", None, &base, &base).unwrap();
-        let output = TempDir::new().unwrap();
+        let output = crate::safe_fs::temp_dir().unwrap();
         github
             .download_archive(
                 &"a".repeat(40),
@@ -1863,7 +1863,7 @@ mod tests {
                 max_files: 2,
             })
             .unwrap();
-        let parent = TempDir::new().unwrap();
+        let parent = crate::safe_fs::temp_dir().unwrap();
         let snapshot = TempDir::new_in(parent.path()).unwrap();
         let path = snapshot.path().to_owned();
         assert!(

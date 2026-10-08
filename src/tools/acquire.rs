@@ -281,13 +281,13 @@ pub fn upgrade_bkmpw(instance: &Path, progress: impl FnMut(Progress)) -> Result<
     install_locked(instance, &release, choice, progress)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[test]
     #[cfg(unix)]
     fn verified_cache_is_reused_and_wrong_hash_or_version_is_rejected() {
-        let instance = tempfile::TempDir::new().unwrap();
+        let instance = crate::safe_fs::temp_dir().unwrap();
         let relative = state::cache_path(Tool::Bkmpw, "0.2.5").unwrap();
         let root = SafeRoot::open(instance.path()).unwrap();
         let script = b"#!/bin/sh\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"completed\",\"ok\":true,\"data\":{\"protocolVersion\":1,\"cliVersion\":\"0.2.5\"}}'\n";

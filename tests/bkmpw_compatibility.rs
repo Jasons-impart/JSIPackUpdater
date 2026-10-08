@@ -17,7 +17,7 @@ fn candidate_operations_match_updater_contract() {
         "candidate must exist; never fall back to a mock"
     );
     bkmpw::installed_version(&executable).unwrap();
-    let fixture = tempfile::TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let source = SafeRoot::open(fixture.path()).unwrap();
     let payload: &[u8] = b"offline compatibility fixture";
     let digest = format!("{:x}", Sha256::digest(payload));
@@ -40,7 +40,7 @@ fn candidate_operations_match_updater_contract() {
         b"rendered fixture"
     );
     for side in [Side::Client, Side::Server] {
-        let destination = tempfile::TempDir::new().unwrap();
+        let destination = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
         let target = SafeRoot::open(destination.path()).unwrap();
         bkmpw::sync(
             &executable,

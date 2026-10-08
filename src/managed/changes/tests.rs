@@ -1,5 +1,4 @@
 use super::*;
-use tempfile::TempDir;
 
 fn descriptor(root: &SafeRoot, path: &str, filename: &str, hash: &str, extra: &str) {
     root.write_atomic(path, format!(
@@ -9,8 +8,8 @@ fn descriptor(root: &SafeRoot, path: &str, filename: &str, hash: &str, extra: &s
 
 #[test]
 fn classifies_release_changes_and_detects_same_filename_content_change() {
-    let a = TempDir::new().unwrap();
-    let b = TempDir::new().unwrap();
+    let a = crate::safe_fs::temp_dir().unwrap();
+    let b = crate::safe_fs::temp_dir().unwrap();
     let a = SafeRoot::open(a.path()).unwrap();
     let b = SafeRoot::open(b.path()).unwrap();
     for root in [&a, &b] {
@@ -68,8 +67,8 @@ fn classifies_release_changes_and_detects_same_filename_content_change() {
 
 #[test]
 fn filters_side_and_non_mod_files_and_reports_optional_defaults() {
-    let a = TempDir::new().unwrap();
-    let b = TempDir::new().unwrap();
+    let a = crate::safe_fs::temp_dir().unwrap();
+    let b = crate::safe_fs::temp_dir().unwrap();
     let a = SafeRoot::open(a.path()).unwrap();
     let b = SafeRoot::open(b.path()).unwrap();
     descriptor(&b, "mods/client/client.pw.toml", "client.jar", "a", "");
@@ -113,8 +112,8 @@ fn filters_side_and_non_mod_files_and_reports_optional_defaults() {
 
 #[test]
 fn descriptor_renames_are_not_guessed_from_non_unique_display_names() {
-    let a = TempDir::new().unwrap();
-    let b = TempDir::new().unwrap();
+    let a = crate::safe_fs::temp_dir().unwrap();
+    let b = crate::safe_fs::temp_dir().unwrap();
     let a = SafeRoot::open(a.path()).unwrap();
     let b = SafeRoot::open(b.path()).unwrap();
     descriptor(&a, "mods/old.pw.toml", "old.jar", "a", "");

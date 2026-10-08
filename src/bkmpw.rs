@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn completed_without_started_is_rejected() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("fake-bkmpw");
         std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"completed\",\"ok\":true}'\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn stalled_partial_line_and_stalled_exit_time_out() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         for (index, body) in [
             "sleep 1 & wait",
             "printf partial; sleep 1 & wait",
@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn invalid_event_with_flooded_stdout_does_not_deadlock_cleanup() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("flood-bkmpw");
         std::fs::write(
             &script,
@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn progress_callback_panic_stops_the_process() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("progress-bkmpw");
         std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"progress\"}'\nsleep 1 & wait\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn escaped_descendant_cannot_block_error_return() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("escaped-bkmpw");
         std::fs::write(
             &script,
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn queued_completion_cannot_hide_slow_callback_timeout() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("queued-bkmpw");
         std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"progress\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":3,\"event\":\"completed\",\"ok\":true}'\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn watchdog_kills_child_while_progress_callback_is_blocked() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("blocked-bkmpw");
         let pid_file = dir.path().join("pid");
         std::fs::write(&script, "#!/bin/sh\necho $$ > \"$3\"\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"progress\"}'\nsleep 5 & wait\n").unwrap();
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn failed_event_kills_background_writer() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("failed-bkmpw");
         let marker = dir.path().join("writer");
         std::fs::write(&script, "#!/bin/sh\n(while :; do echo tick >> \"$3\"; sleep 0.02; done) </dev/null >/dev/null 2>&1 &\necho $! > \"$3.pid\"\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"failed\",\"ok\":false,\"error\":{\"code\":\"TEST\",\"message\":\"failed\"}}'\nexit 2\n").unwrap();
@@ -696,7 +696,7 @@ mod tests {
     #[test]
     fn failed_event_ends_stalled_process_without_losing_error() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("failed-stall-bkmpw");
         std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"failed\",\"ok\":false,\"error\":{\"code\":\"INTENTIONAL\",\"message\":\"failed\"}}'\nsleep 5 & wait\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -718,7 +718,7 @@ mod tests {
     #[test]
     fn completed_event_stops_background_writer_before_return() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("completed-bkmpw");
         let marker = dir.path().join("writer");
         std::fs::write(&script, "#!/bin/sh\n(while :; do echo tick >> \"$3\"; sleep 0.02; done) </dev/null >/dev/null 2>&1 &\necho $! > \"$3.pid\"\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"completed\",\"ok\":true}'\nexit 0\n").unwrap();
@@ -757,7 +757,7 @@ mod tests {
     #[test]
     fn completed_parent_with_inherited_stdout_does_not_wait_for_descendant() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("inherited-stdout-bkmpw");
         std::fs::write(&script, "#!/bin/sh\nsleep 5 &\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"completed\",\"ok\":true}'\nexit 0\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -778,7 +778,7 @@ mod tests {
     #[test]
     fn incomplete_parent_with_inherited_stdout_fails_promptly() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("incomplete-stdout-bkmpw");
         std::fs::write(&script, "#!/bin/sh\nsleep 5 &\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}'\nexit 0\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -800,7 +800,7 @@ mod tests {
     #[test]
     fn completed_parent_with_escaped_stdout_returns_after_bounded_drain() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let script = dir.path().join("escaped-completed-bkmpw");
         let pid_file = dir.path().join("pid");
         std::fs::write(&script, "#!/bin/sh\nsetsid sleep 5 &\necho $! > \"$3\"\nprintf '%s\\n' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":1,\"event\":\"started\"}' '{\"protocolVersion\":1,\"command\":\"protocol-version\",\"sequence\":2,\"event\":\"completed\",\"ok\":true}'\nexit 0\n").unwrap();

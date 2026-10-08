@@ -261,7 +261,7 @@ mod windows_tests {
     use super::*;
     #[test]
     fn executable_shims_work_without_an_adjacent_npm_javascript_layout() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let shim = dir.path().join("npm.exe");
         std::fs::copy(std::env::current_exe().unwrap(), &shim).unwrap();
         let mut command = windows_npm(&shim, None).unwrap();
@@ -294,7 +294,7 @@ mod tests {
     }
     #[test]
     fn cleans_up_children_when_the_parent_exits_first() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let marker = dir.path().join("leaked");
         let mut command = Command::new("sh");
         command
@@ -307,8 +307,8 @@ mod tests {
     #[test]
     fn skips_non_executable_path_entries() {
         use std::os::unix::fs::PermissionsExt;
-        let first = tempfile::TempDir::new().unwrap();
-        let second = tempfile::TempDir::new().unwrap();
+        let first = crate::safe_fs::temp_dir().unwrap();
+        let second = crate::safe_fs::temp_dir().unwrap();
         std::fs::write(first.path().join("npm"), "ignored").unwrap();
         let executable = second.path().join("npm");
         std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
@@ -417,7 +417,7 @@ fn npm_binary_in(tool: Tool, root: &std::path::Path) -> Result<PathBuf> {
 #[cfg(test)]
 #[test]
 fn npm_discovery_selects_the_host_native_file_for_both_tools() {
-    let root = tempfile::TempDir::new().unwrap();
+    let root = crate::safe_fs::temp_dir().unwrap();
     let os = match std::env::consts::OS {
         "macos" => "darwin",
         "windows" => "win32",

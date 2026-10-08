@@ -42,6 +42,16 @@ pub struct SafeRoot {
     dir: Dir,
 }
 
+/// Create an owned temporary directory under the physical system temp directory.
+/// macOS exposes its default temp parent through the `/var` system alias.
+pub fn temp_dir() -> io::Result<tempfile::TempDir> {
+    temp_dir_in(&std::env::temp_dir())
+}
+
+fn temp_dir_in(parent: &Path) -> io::Result<tempfile::TempDir> {
+    tempfile::TempDir::new_in(parent.canonicalize()?)
+}
+
 #[cfg(windows)]
 fn open_attributes(dir: &Dir, name: &str) -> Result<cap_std::fs::File> {
     use cap_std::fs::OpenOptionsExt;
@@ -772,6 +782,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chosen_root_rejects_parent_components_before_resolution() {
+        let dir = crate::safe_fs::temp_dir().unwrap();
+        // Joining onto a Windows verbatim path would normalize away `..`.
+        let path = PathBuf::from(format!(
+            "{}{}..",
+            dir.path().display(),
+            std::path::MAIN_SEPARATOR
+        ));
+        assert!(path.components().any(|part| part == Component::ParentDir));
+        assert!(SafeRoot::open(&path).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_root_resolves_parent_alias_and_internal_symlinks_stay_blocked() {
+        use std::os::unix::fs::symlink;
+        let base = crate::safe_fs::temp_dir().unwrap();
+        let physical = base.path().join("physical");
+        let other = base.path().join("other");
+        std::fs::create_dir_all(&physical).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("private.txt"), b"keep").unwrap();
+        let alias = base.path().join("alias");
+        symlink(&physical, &alias).unwrap();
+        let directory = temp_dir_in(&alias).unwrap();
+        assert!(
+            directory
+                .path()
+                .starts_with(physical.canonicalize().unwrap())
+        );
+        let root = SafeRoot::open(directory.path()).unwrap();
+        std::fs::remove_file(&alias).unwrap();
+        symlink(&other, &alias).unwrap();
+        root.write_atomic("managed.txt", &b"new"[..]).unwrap();
+        assert_eq!(
+            std::fs::read(directory.path().join("managed.txt")).unwrap(),
+            b"new"
+        );
+        assert!(!other.join("managed.txt").exists());
+        symlink(&other, directory.path().join("escape")).unwrap();
+        assert!(root.read("escape/private.txt").is_err());
+        assert!(
+            root.write_atomic("escape/private.txt", &b"changed"[..])
+                .is_err()
+        );
+        assert_eq!(std::fs::read(other.join("private.txt")).unwrap(), b"keep");
+    }
+
+    #[test]
     fn bounded_reader_rejects_understated_size() {
         let mut contents = std::io::repeat(0).take(MAX_PREVIEW_FILE_BYTES + 1);
         assert!(
@@ -795,7 +854,7 @@ mod tests {
 
     #[test]
     fn artifact_hashing_streams_past_preview_limit() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = crate::safe_fs::temp_dir().unwrap();
         let file = std::fs::File::create(dir.path().join("large.jar")).unwrap();
         file.set_len(MAX_PREVIEW_FILE_BYTES + 1).unwrap();
         let root = SafeRoot::open(dir.path()).unwrap();
@@ -807,8 +866,8 @@ mod tests {
 
     #[test]
     fn checked_copy_preserves_external_edit_before_replace() {
-        let source = tempfile::TempDir::new().unwrap();
-        let target = tempfile::TempDir::new().unwrap();
+        let source = crate::safe_fs::temp_dir().unwrap();
+        let target = crate::safe_fs::temp_dir().unwrap();
         std::fs::write(source.path().join("file.txt"), b"new").unwrap();
         std::fs::write(target.path().join("file.txt"), b"old").unwrap();
         let source_root = SafeRoot::open(source.path()).unwrap();
@@ -832,8 +891,8 @@ mod tests {
     #[test]
     fn atomic_copy_preserves_existing_and_new_file_modes() {
         use std::os::unix::fs::PermissionsExt;
-        let source = tempfile::TempDir::new().unwrap();
-        let target = tempfile::TempDir::new().unwrap();
+        let source = crate::safe_fs::temp_dir().unwrap();
+        let target = crate::safe_fs::temp_dir().unwrap();
         std::fs::write(source.path().join("script.sh"), b"new").unwrap();
         std::fs::set_permissions(
             source.path().join("script.sh"),

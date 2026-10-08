@@ -969,7 +969,7 @@ mod setup_tests {
 
     #[test]
     fn corrupted_marker_does_not_hide_pending_transaction() {
-        let root = tempfile::TempDir::new().unwrap();
+        let root = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
         std::fs::create_dir_all(root.path().join(".jsipack-updater")).unwrap();
         std::fs::write(root.path().join(".jsipack-updater/active.json"), b"{}").unwrap();
         let mut app = GuiApp::default();

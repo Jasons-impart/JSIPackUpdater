@@ -3,7 +3,6 @@ use minecraft_modpack_updater::planner::{
 };
 use std::fs;
 use std::path::Path;
-use tempfile::TempDir;
 
 fn file(value: &str) -> LocalFile {
     LocalFile::File(value.as_bytes().to_vec())
@@ -157,7 +156,7 @@ fn write(root: &Path, path: &str, contents: &str) {
 
 #[test]
 fn fixture_plan_includes_missing_files_and_private_collisions() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -206,7 +205,7 @@ fn fixture_plan_includes_missing_files_and_private_collisions() {
 
 #[test]
 fn rejects_case_collisions_and_reserved_paths() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -224,7 +223,7 @@ fn rejects_case_collisions_and_reserved_paths() {
 
 #[test]
 fn file_to_directory_transition_is_planned_as_conflict() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -238,7 +237,7 @@ fn file_to_directory_transition_is_planned_as_conflict() {
 
 #[test]
 fn fully_applied_file_directory_transitions_need_no_conflict() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -265,7 +264,7 @@ fn fully_applied_file_directory_transitions_need_no_conflict() {
 
 #[test]
 fn case_only_directory_rename_is_a_conflict() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -283,7 +282,7 @@ fn case_only_directory_rename_is_a_conflict() {
 
 #[test]
 fn private_directory_case_collision_is_a_conflict() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -296,7 +295,7 @@ fn private_directory_case_collision_is_a_conflict() {
 
 #[test]
 fn deleted_path_with_different_local_case_is_a_conflict() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -309,7 +308,7 @@ fn deleted_path_with_different_local_case_is_a_conflict() {
 
 #[test]
 fn unicode_case_equivalent_instance_name_conflicts() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -324,7 +323,7 @@ fn unicode_case_equivalent_instance_name_conflicts() {
 #[test]
 fn rejects_symlinked_instance_path() {
     use std::os::unix::fs::symlink;
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -343,7 +342,7 @@ fn rejects_symlinked_instance_path() {
 
 #[test]
 fn cli_json_preview_reports_conflicts_without_writing() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -383,7 +382,7 @@ fn cli_json_preview_reports_conflicts_without_writing() {
 
 #[test]
 fn cli_rejects_mismatched_base_commit_with_same_component_versions() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -414,7 +413,7 @@ fn cli_rejects_mismatched_base_commit_with_same_component_versions() {
 #[test]
 fn component_change_stops_preview() {
     use minecraft_modpack_updater::version::check_components;
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -449,7 +448,7 @@ fn descriptor_change_after_validation_invalidates_plan() {
     use minecraft_modpack_updater::planner::plan_roots_checked;
     use minecraft_modpack_updater::safe_fs::SafeRoot;
     use minecraft_modpack_updater::version::check_components_roots;
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -484,7 +483,7 @@ fn descriptor_change_after_validation_invalidates_plan() {
 #[test]
 fn oversized_file_fails_before_allocation() {
     use minecraft_modpack_updater::safe_fs::SafeRoot;
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let path = fixture.path().join("large.bin");
     fs::File::create(&path)
         .unwrap()
@@ -501,7 +500,7 @@ fn oversized_file_fails_before_allocation() {
 
 #[test]
 fn oversized_snapshot_fails_before_hashing() {
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -525,7 +524,7 @@ fn oversized_snapshot_fails_before_hashing() {
 fn metadata_symlink_is_rejected_before_reading() {
     use minecraft_modpack_updater::version::check_components;
     use std::os::unix::fs::symlink;
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");
@@ -558,7 +557,7 @@ fn metadata_symlink_is_rejected_before_reading() {
 fn symlinked_root_is_rejected_with_trailing_components() {
     use minecraft_modpack_updater::safe_fs::SafeRoot;
     use std::os::unix::fs::symlink;
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let target = fixture.path().join("target");
     fs::create_dir(&target).unwrap();
     let link = fixture.path().join("link");
@@ -575,7 +574,7 @@ fn symlinked_root_is_rejected_with_trailing_components() {
 #[test]
 fn pinned_root_reads_original_directory_after_rename() {
     use minecraft_modpack_updater::safe_fs::SafeRoot;
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let root = fixture.path().join("root");
     write(&root, "value.txt", "old");
     let pinned = SafeRoot::open(&root).unwrap();
@@ -588,7 +587,7 @@ fn pinned_root_reads_original_directory_after_rename() {
 #[test]
 fn unrelated_non_utf8_instance_file_does_not_block_preview() {
     use std::os::unix::ffi::OsStringExt;
-    let fixture = TempDir::new().unwrap();
+    let fixture = minecraft_modpack_updater::safe_fs::temp_dir().unwrap();
     let base = fixture.path().join("base");
     let target = fixture.path().join("target");
     let instance = fixture.path().join("instance");

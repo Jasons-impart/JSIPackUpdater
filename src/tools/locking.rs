@@ -72,7 +72,7 @@ mod tests {
             assert!(tool_lock(Tool::Bkmpw, false).is_err());
             return;
         }
-        let temp = tempfile::TempDir::new().unwrap();
+        let temp = crate::safe_fs::temp_dir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -90,7 +90,7 @@ mod tests {
     }
     #[test]
     fn private_directory_rejects_shared_permissions_and_locks_exclude_mutation() {
-        let temp = tempfile::TempDir::new().unwrap();
+        let temp = crate::safe_fs::temp_dir().unwrap();
         let root = SafeRoot::open(temp.path()).unwrap();
         root.ensure_dir("public").unwrap();
         use std::os::unix::fs::PermissionsExt;
