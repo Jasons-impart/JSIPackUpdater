@@ -67,7 +67,7 @@ cargo build --release --features gui
 
 `update-local` 和 `preview`/`preview-managed` 可用本地完整源码快照验证更新；快照目录须对应传入的完整 commit SHA。`update-local` 还需 `--base-commit`、`--target-commit`、`--base-tree`、`--target-tree`、`--instance`、`--side`，并可用 `--bkmpw` 指向协议兼容的本地程序。发布工作流在 Linux、Windows、macOS 构建更新器原生程序、便携包和 npm 平台包，独立验证推荐 bkmpw 并生成版本清单；发布包不夹带 bkmpw。
 
-发布 tag `vX.Y.Z` 必须匹配 `Cargo.toml` 版本。先发布包含六个平台原生资产与 SHA-256 的 bkmpw 稳定版本；更新器使用仓库变量 `BKMPW_TAG` 选择推荐版本，默认 `v0.2.6`。六个平台构建、测试与真实 bkmpw 兼容性验证通过后才发布 GitHub Release，然后发布六个 npm 平台包与入口包。
+发布 tag `vX.Y.Z` 必须匹配 `Cargo.toml` 版本。先发布包含六个平台原生资产与 SHA-256 的 bkmpw 稳定版本；更新器使用仓库变量 `BKMPW_TAG` 选择推荐版本，默认 `v0.2.7`。六个平台构建、测试与真实 bkmpw 兼容性验证通过后才发布 GitHub Release，然后发布六个 npm 平台包与入口包。
 
 npm 使用 GitHub Actions OIDC Trusted Publishing，无需 `NPM_TOKEN`。七个包须分别配置 GitHub owner `Jasons-impart`、repository `JSIPackUpdater`、workflow `release.yml`，Environment 留空，并允许 `npm publish`。首次发包使用 CI 上传的 `npm-packages` tgz，先平台包、后入口包；需要维护者 npm 登录并完成 2FA。失败后重跑只跳过内容完全一致的已发布版本。
 
