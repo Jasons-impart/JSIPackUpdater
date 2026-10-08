@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  BKMPW_TAG: ${{ inputs.bkmpw_tag || vars.BKMPW_TAG || 'v0.2.5' }}
+  BKMPW_TAG: ${{ inputs.bkmpw_tag || vars.BKMPW_TAG || 'v0.2.6' }}
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('updater-pr-{0}', github.event.pull_request.number) || format('updater-ref-{0}', github.ref) }}

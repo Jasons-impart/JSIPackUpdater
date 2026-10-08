@@ -4,7 +4,16 @@ Minecraft 整合包更新器。CLI、TUI 和可选的 egui GUI 共用 Rust 更�
 
 ## 使用
 
-先停止游戏或服务端，并备份整个实例。下载与操作系统相符的更新器压缩包，运行其中的 `minecraft-modpack-updater`。更新器自动检测 bkmpw；缺少时可选择下载到实例目录或通过 npm 全局安装。实例须含 `config/createdelight_release_info.json`。安装、独立升级和下载进度见 [工具说明](docs/tools.md)。
+先停止游戏或服务端，并备份整个实例。下载 [Release](https://github.com/Jasons-impart/JSIPackUpdater/releases) 中与操作系统相符的压缩包，解压后运行其中的 `minecraft-modpack-updater`。支持 Linux（glibc）、Windows、macOS 的 x64 / ARM64；便携包无需 Node.js。
+
+也可通过 npm 安装（需要 Node.js 18 或更新版本）：
+
+```sh
+npm install --global @jsi-team/minecraft-modpack-updater
+minecraft-modpack-updater gui
+```
+
+npm 自动选择当前平台的原生程序。更新器自动检测 bkmpw；缺少时可选择下载到实例目录或通过 npm 全局安装。实例须含 `config/createdelight_release_info.json`。
 
 ```bash
 # 预览（不会写入实例）
@@ -33,7 +42,22 @@ minecraft-modpack-updater rollback --instance /path/to/minecraft
 
 更新器把侧别、可信缓存、生成文件基线、覆盖状态及事务备份放在实例内 `.jsipack-updater/`。准备和下载失败不会改动实例；应用中断后需先运行 `rollback`，再重新更新。不要在更新时启动游戏或修改实例文件。
 
-## 开发与验收
+## 工具安装与升级
+
+更新器不夹带 bkmpw。GUI 的“工具与更新”提供安装与版本检查；TUI 缺少工具时可按 `l` 下载到实例，或按 `n` 通过 npm 全局安装 `@bro-know-my/packwiz`。实例内下载写入 `.jsipack-updater/bin/`，无需 npm。
+
+```sh
+minecraft-modpack-updater tools install bkmpw --instance /path/to/game --method local
+minecraft-modpack-updater tools check --instance /path/to/game
+minecraft-modpack-updater tools upgrade bkmpw --instance /path/to/game
+minecraft-modpack-updater tools upgrade updater --instance /path/to/game
+```
+
+交互终端缺少 bkmpw 时会询问安装方式；自动化脚本可在更新命令上使用 `--install-bkmpw local`。本体升级会下载并校验新程序，退出后由助手替换、重启，启动失败时尝试恢复旧版。未完成的实例事务需要先回退。
+
+工具和源码快照下载显示实际大小、速度与进度。npm 安装显示真实输出；模组同步显示活动状态及 bkmpw 日志。在线版本检查、源码和缺少的模组下载需要联网。
+
+## 开发与发布
 
 ```bash
 cargo test --all-features
@@ -43,4 +67,8 @@ cargo build --release --features gui
 
 `update-local` 和 `preview`/`preview-managed` 可用本地完整源码快照验证更新；快照目录须对应传入的完整 commit SHA。`update-local` 还需 `--base-commit`、`--target-commit`、`--base-tree`、`--target-tree`、`--instance`、`--side`，并可用 `--bkmpw` 指向协议兼容的本地程序。发布工作流在 Linux、Windows、macOS 构建更新器原生程序、便携包和 npm 平台包，独立验证推荐 bkmpw 并生成版本清单；发布包不夹带 bkmpw。
 
-实施细节和验收边界见 [实施计划](docs/implementation-plan.md)。
+发布 tag `vX.Y.Z` 必须匹配 `Cargo.toml` 版本。先发布包含六个平台原生资产与 SHA-256 的 bkmpw 稳定版本；更新器使用仓库变量 `BKMPW_TAG` 选择推荐版本，默认 `v0.2.6`。六个平台构建、测试与真实 bkmpw 兼容性验证通过后才发布 GitHub Release，然后发布六个 npm 平台包与入口包。
+
+npm 使用 GitHub Actions OIDC Trusted Publishing，无需 `NPM_TOKEN`。七个包须分别配置 GitHub owner `Jasons-impart`、repository `JSIPackUpdater`、workflow `release.yml`，Environment 留空，并允许 `npm publish`。首次发包使用 CI 上传的 `npm-packages` tgz，先平台包、后入口包；需要维护者 npm 登录并完成 2FA。失败后重跑只跳过内容完全一致的已发布版本。
+
+游戏内入口 **Modpack Update Checker** 在独立仓库维护；与更新器的原生交接尚未实现。

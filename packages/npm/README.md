@@ -9,4 +9,4 @@ Provides the native CLI, TUI and GUI for Linux (glibc), Windows and macOS on x64
 
 bkmpw is detected separately and is not bundled. If missing, choose an instance-local download or npm global installation of `@bro-know-my/packwiz`.
 
-See [tool setup and upgrades](https://github.com/Jasons-impart/JSIPackUpdater/blob/main/docs/tools.md).
+See [usage, tool setup and upgrades](https://github.com/Jasons-impart/JSIPackUpdater#readme).
