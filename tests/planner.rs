@@ -583,7 +583,8 @@ fn pinned_root_reads_original_directory_after_rename() {
     assert_eq!(pinned.required_file("value.txt").unwrap(), b"old");
 }
 
-#[cfg(unix)]
+// macOS filesystems reject invalid UTF-8 filenames before a fixture can exist.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn unrelated_non_utf8_instance_file_does_not_block_preview() {
     use std::os::unix::ffi::OsStringExt;
